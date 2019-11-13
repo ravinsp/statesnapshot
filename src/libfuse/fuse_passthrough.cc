@@ -73,11 +73,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <list>
-#include "cxxopts.hpp"
 #include <mutex>
 #include <fstream>
 #include <thread>
 #include <iomanip>
+#include <iostream>
+#include <unordered_map>
 
 using namespace std;
 
@@ -1140,59 +1141,6 @@ static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
 #endif
 }
 
-static void print_usage(char *prog_name) {
-    cout << "Usage: " << prog_name << " --help\n"
-         << "       " << prog_name << " [options] <source> <mountpoint>\n";
-}
-
-static cxxopts::ParseResult parse_wrapper(cxxopts::Options& parser, int& argc, char**& argv) {
-    try {
-        return parser.parse(argc, argv);
-    } catch (cxxopts::option_not_exists_exception& exc) {
-        std::cout << argv[0] << ": " << exc.what() << std::endl;
-        print_usage(argv[0]);
-        exit(2);
-    }
-}
-
-
-static cxxopts::ParseResult parse_options(int argc, char **argv) {
-    cxxopts::Options opt_parser(argv[0]);
-    opt_parser.add_options()
-        ("debug", "Enable filesystem debug messages")
-        ("debug-fuse", "Enable libfuse debug messages")
-        ("help", "Print help")
-        ("nocache", "Disable all caching")
-        ("nosplice", "Do not use splice(2) to transfer data")
-        ("single", "Run single-threaded");
-
-    // FIXME: Find a better way to limit the try clause to just
-    // opt_parser.parse() (cf. https://github.com/jarro2783/cxxopts/issues/146)
-    auto options = parse_wrapper(opt_parser, argc, argv);
-
-    if (options.count("help")) {
-        print_usage(argv[0]);
-        // Strip everything before the option list from the
-        // default help string.
-        auto help = opt_parser.help();
-        std::cout << std::endl << "options:"
-                  << help.substr(help.find("\n\n") + 1, string::npos);
-        exit(0);
-
-    } else if (argc != 3) {
-        std::cout << argv[0] << ": invalid number of arguments\n";
-        print_usage(argv[0]);
-        exit(2);
-    }
-
-    fs.debug = options.count("debug") != 0;
-    fs.nosplice = options.count("nosplice") != 0;
-    fs.source = std::string {realpath(argv[1], NULL)};
-
-    return options;
-}
-
-
 static void maximize_fd_limit() {
     struct rlimit lim {};
     auto res = getrlimit(RLIMIT_NOFILE, &lim);
@@ -1209,8 +1157,7 @@ static void maximize_fd_limit() {
 
 int main(int argc, char *argv[]) {
 
-    // Parse command line options
-    auto options {parse_options(argc, argv)};
+    fs.source = std::string {realpath(argv[1], NULL)};    
 
     // We need an fd for every dentry in our the filesystem that the
     // kernel knows about. This is way more than most processes need,
@@ -1221,7 +1168,7 @@ int main(int argc, char *argv[]) {
     fs.root.fd = -1;
     fs.root.nlookup = 9999;
     fs.root.is_symlink = false;
-    fs.timeout = options.count("nocache") ? 0 : 86400.0;
+    fs.timeout = 86400.0;
 
     struct stat stat;
     auto ret = lstat(fs.source.c_str(), &stat);
@@ -1239,8 +1186,8 @@ int main(int argc, char *argv[]) {
     fuse_args args = FUSE_ARGS_INIT(0, nullptr);
     if (fuse_opt_add_arg(&args, argv[0]) ||
         fuse_opt_add_arg(&args, "-o") ||
-        fuse_opt_add_arg(&args, "default_permissions,fsname=hpps") ||
-        (options.count("debug-fuse") && fuse_opt_add_arg(&args, "-odebug")))
+        fuse_opt_add_arg(&args, "default_permissions,fsname=hpps")
+        /*|| fuse_opt_add_arg(&args, "-odebug")*/)
         errx(3, "ERROR: Out of memory");
 
     fuse_lowlevel_ops sfs_oper {};
@@ -1261,10 +1208,8 @@ int main(int argc, char *argv[]) {
     loop_config.max_idle_threads = 10;
     if (fuse_session_mount(se, argv[2]) != 0)
         goto err_out3;
-    if (options.count("single"))
-        ret = fuse_session_loop(se);
-    else
-        ret = fuse_session_loop_mt(se, &loop_config);
+    
+    ret = fuse_session_loop_mt(se, &loop_config);
 
     fuse_session_unmount(se);
 
