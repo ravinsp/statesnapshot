@@ -20,8 +20,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(FUSE_PKG REQUIRED IMPORTED_TARGET fuse3)
 
 add_executable(statesnap
-    #src/main.cpp
-    src/libfuse/fuse_passthrough.cc
+    src/main.cpp
+    src/fusefs.cpp
+    src/state_monitor.cpp
 )
 
 target_link_libraries(statesnap

@@ -1,46 +1,5 @@
 /*
-  FUSE: Filesystem in Userspace
-  Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
-  Copyright (C) 2017       Nikolaus Rath <Nikolaus@rath.org>
-  Copyright (C) 2018       Valve, Inc
-
-  This program can be distributed under the terms of the GNU GPL.
-  See the file COPYING.
-*/
-
-/** @file
- *
- * This is a "high-performance" version of passthrough_ll.c. While
- * passthrough_ll.c is designed to be as simple as possible, this
- * example intended to be as efficient and correct as possible.
- *
- * passthrough_hp.cc mirrors a specified "source" directory under a
- * specified the mountpoint with as much fidelity and performance as
- * possible.
- *
- * If --nocache is specified, the source directory may be changed
- * directly even while mounted and the filesystem will continue
- * to work correctly.
- *
- * Without --nocache, the source directory is assumed to be modified
- * only through the passthrough filesystem. This enables much better
- * performance, but if changes are made directly to the source, they
- * may not be immediately visible under the mountpoint and further
- * access to the mountpoint may result in incorrect behavior,
- * including data-loss.
- *
- * On its own, this filesystem fulfills no practical purpose. It is
- * intended as a template upon which additional functionality can be
- * built.
- *
- * Unless --nocache is specified, is only possible to write to files
- * for which the mounting user has read permissions. This is because
- * the writeback cache requires the kernel to be able to issue read
- * requests for all files (which the passthrough filesystem cannot
- * satisfy if it can't read the file in the underlying filesystem).
- *
- * ## Source code ##
- * \include passthrough_hp.cc
+ * Code copied and adopted from https://github.com/libfuse/libfuse/blob/master/example/passthrough_hp.cc
  */
 
 #define FUSE_USE_VERSION 35
@@ -79,22 +38,9 @@
 #include <iomanip>
 #include <iostream>
 #include <unordered_map>
+#include "state_monitor.hpp"
 
 using namespace std;
-
-/* We are re-using pointers to our `struct sfs_inode` and `struct
-   sfs_dirp` elements as inodes and file handles. This means that we
-   must be able to store pointer a pointer in both a fuse_ino_t
-   variable and a uint64_t variable (used for file handles). */
-static_assert(sizeof(fuse_ino_t) >= sizeof(void *),
-              "void* must fit into fuse_ino_t");
-static_assert(sizeof(fuse_ino_t) >= sizeof(uint64_t),
-              "fuse_ino_t must be at least 64 bits");
-
-/* Forward declarations */
-struct Inode;
-static Inode &get_inode(fuse_ino_t ino);
-static void forget_one(fuse_ino_t ino, uint64_t n);
 
 // Uniquely identifies a file in the source directory tree. This could
 // be simplified to just ino_t since we require the source directory
@@ -117,6 +63,23 @@ struct hash<SrcId>
     }
 };
 } // namespace std
+
+namespace fusefs
+{
+
+/* We are re-using pointers to our `struct sfs_inode` and `struct
+   sfs_dirp` elements as inodes and file handles. This means that we
+   must be able to store pointer a pointer in both a fuse_ino_t
+   variable and a uint64_t variable (used for file handles). */
+static_assert(sizeof(fuse_ino_t) >= sizeof(void *),
+              "void* must fit into fuse_ino_t");
+static_assert(sizeof(fuse_ino_t) >= sizeof(uint64_t),
+              "fuse_ino_t must be at least 64 bits");
+
+/* Forward declarations */
+struct Inode;
+static Inode &get_inode(fuse_ino_t ino);
+static void forget_one(fuse_ino_t ino, uint64_t n);
 
 // Maps files in the source directory tree to inodes
 typedef std::unordered_map<SrcId, Inode> InodeMap;
@@ -160,6 +123,7 @@ struct Fs
     bool nocache;
 };
 static Fs fs{};
+static state_monitor statemonitor;
 
 #define FUSE_BUF_COPY_FLAGS \
     (fs.nosplice ? FUSE_BUF_NO_SPLICE : static_cast<fuse_buf_copy_flags>(0))
@@ -923,6 +887,7 @@ static void sfs_release(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
 {
     (void)ino;
     close(fi->fh);
+    statemonitor.onclose(fi->fh);
     fuse_reply_err(req, 0);
 }
 
@@ -985,6 +950,9 @@ static void sfs_write_buf(fuse_req_t req, fuse_ino_t ino, fuse_bufvec *in_buf,
 {
     (void)ino;
     auto size{fuse_buf_size(in_buf)};
+
+    statemonitor.onwrite(fi->fh, off, size);
+
     do_write_buf(req, size, off, in_buf, fi);
 }
 
@@ -1220,7 +1188,7 @@ static void assign_operations(fuse_lowlevel_ops &sfs_oper)
 #endif
 }
 
-static void maximize_fd_limit()
+void maximize_fd_limit()
 {
     struct rlimit lim
     {
@@ -1237,15 +1205,12 @@ static void maximize_fd_limit()
         warn("WARNING: setrlimit() failed with");
 }
 
-int main(int argc, char *argv[])
+int start(const char *arg0, const char *sourcedir, const char *mountpoint, const char *scratchdir)
 {
+    fs.source = std::string{realpath(sourcedir, NULL)};
 
-    fs.source = std::string{realpath(argv[1], NULL)};
-
-    // We need an fd for every dentry in our the filesystem that the
-    // kernel knows about. This is way more than most processes need,
-    // so try to get rid of any resource softlimit.
-    maximize_fd_limit();
+    statemonitor.monitoreddir = fs.source;
+    statemonitor.scratchdir = std::string{realpath(scratchdir, NULL)};
 
     // Initialize filesystem root
     fs.root.fd = -1;
@@ -1267,9 +1232,9 @@ int main(int argc, char *argv[])
 
     // Initialize fuse
     fuse_args args = FUSE_ARGS_INIT(0, nullptr);
-    if (fuse_opt_add_arg(&args, argv[0]) ||
+    if (fuse_opt_add_arg(&args, arg0) ||
         fuse_opt_add_arg(&args, "-o") ||
-        fuse_opt_add_arg(&args, "default_permissions,fsname=hpps")
+        fuse_opt_add_arg(&args, "default_permissions,fsname=fusefstest")
         /*|| fuse_opt_add_arg(&args, "-odebug")*/)
         errx(3, "ERROR: Out of memory");
 
@@ -1289,7 +1254,7 @@ int main(int argc, char *argv[])
     struct fuse_loop_config loop_config;
     loop_config.clone_fd = 0;
     loop_config.max_idle_threads = 10;
-    if (fuse_session_mount(se, argv[2]) != 0)
+    if (fuse_session_mount(se, mountpoint) != 0)
         goto err_out3;
 
     ret = fuse_session_loop_mt(se, &loop_config);
@@ -1305,3 +1270,5 @@ err_out1:
 
     return ret ? 1 : 0;
 }
+
+} // namespace fusefs
