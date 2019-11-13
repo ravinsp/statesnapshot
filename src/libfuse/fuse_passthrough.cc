@@ -86,15 +86,14 @@ using namespace std;
    sfs_dirp` elements as inodes and file handles. This means that we
    must be able to store pointer a pointer in both a fuse_ino_t
    variable and a uint64_t variable (used for file handles). */
-static_assert(sizeof(fuse_ino_t) >= sizeof(void*),
+static_assert(sizeof(fuse_ino_t) >= sizeof(void *),
               "void* must fit into fuse_ino_t");
 static_assert(sizeof(fuse_ino_t) >= sizeof(uint64_t),
               "fuse_ino_t must be at least 64 bits");
 
-
 /* Forward declarations */
 struct Inode;
-static Inode& get_inode(fuse_ino_t ino);
+static Inode &get_inode(fuse_ino_t ino);
 static void forget_one(fuse_ino_t ino, uint64_t n);
 
 // Uniquely identifies a file in the source directory tree. This could
@@ -107,41 +106,47 @@ static void forget_one(fuse_ino_t ino, uint64_t n);
 typedef std::pair<ino_t, dev_t> SrcId;
 
 // Define a hash function for SrcId
-namespace std {
-    template<>
-    struct hash<SrcId> {
-        size_t operator()(const SrcId& id) const {
-            return hash<ino_t>{}(id.first) ^ hash<dev_t>{}(id.second);
-        }
-    };
-}
+namespace std
+{
+template <>
+struct hash<SrcId>
+{
+    size_t operator()(const SrcId &id) const
+    {
+        return hash<ino_t>{}(id.first) ^ hash<dev_t>{}(id.second);
+    }
+};
+} // namespace std
 
 // Maps files in the source directory tree to inodes
 typedef std::unordered_map<SrcId, Inode> InodeMap;
 
-struct Inode {
-    int fd {-1};
-    bool is_symlink {false};
-    dev_t src_dev {0};
-    ino_t src_ino {0};
-    uint64_t nlookup {0};
+struct Inode
+{
+    int fd{-1};
+    bool is_symlink{false};
+    dev_t src_dev{0};
+    ino_t src_ino{0};
+    uint64_t nlookup{0};
     std::mutex m;
 
     // Delete copy constructor and assignments. We could implement
     // move if we need it.
     Inode() = default;
-    Inode(const Inode&) = delete;
-    Inode(Inode&& inode) = delete;
-    Inode& operator=(Inode&& inode) = delete;
-    Inode& operator=(const Inode&) = delete;
+    Inode(const Inode &) = delete;
+    Inode(Inode &&inode) = delete;
+    Inode &operator=(Inode &&inode) = delete;
+    Inode &operator=(const Inode &) = delete;
 
-    ~Inode() {
-        if(fd > 0)
+    ~Inode()
+    {
+        if (fd > 0)
             close(fd);
     }
 };
 
-struct Fs {
+struct Fs
+{
     // Must be acquired *after* any Inode.m locks.
     std::mutex mutex;
     InodeMap inodes; // protected by mutex
@@ -156,33 +161,31 @@ struct Fs {
 };
 static Fs fs{};
 
+#define FUSE_BUF_COPY_FLAGS \
+    (fs.nosplice ? FUSE_BUF_NO_SPLICE : static_cast<fuse_buf_copy_flags>(0))
 
-#define FUSE_BUF_COPY_FLAGS                      \
-        (fs.nosplice ?                           \
-            FUSE_BUF_NO_SPLICE :                 \
-            static_cast<fuse_buf_copy_flags>(0))
-
-
-static Inode& get_inode(fuse_ino_t ino) {
+static Inode &get_inode(fuse_ino_t ino)
+{
     if (ino == FUSE_ROOT_ID)
         return fs.root;
 
-    Inode* inode = reinterpret_cast<Inode*>(ino);
-    if(inode->fd == -1) {
+    Inode *inode = reinterpret_cast<Inode *>(ino);
+    if (inode->fd == -1)
+    {
         cerr << "INTERNAL ERROR: Unknown inode " << ino << endl;
         abort();
     }
     return *inode;
 }
 
-
-static int get_fs_fd(fuse_ino_t ino) {
+static int get_fs_fd(fuse_ino_t ino)
+{
     int fd = get_inode(ino).fd;
     return fd;
 }
 
-
-static void sfs_init(void *userdata, fuse_conn_info *conn) {
+static void sfs_init(void *userdata, fuse_conn_info *conn)
+{
     (void)userdata;
     if (conn->capable & FUSE_CAP_EXPORT_SUPPORT)
         conn->want |= FUSE_CAP_EXPORT_SUPPORT;
@@ -202,29 +205,32 @@ static void sfs_init(void *userdata, fuse_conn_info *conn) {
         conn->want |= FUSE_CAP_SPLICE_READ;
 }
 
-
-static void sfs_getattr(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
+static void sfs_getattr(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
+{
     (void)fi;
-    Inode& inode = get_inode(ino);
+    Inode &inode = get_inode(ino);
     struct stat attr;
     auto res = fstatat(inode.fd, "", &attr,
                        AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
-    if (res == -1) {
+    if (res == -1)
+    {
         fuse_reply_err(req, errno);
         return;
     }
     fuse_reply_attr(req, &attr, fs.timeout);
 }
 
-
 #ifdef HAVE_UTIMENSAT
-static int utimensat_empty_nofollow(Inode& inode,
-                                    const struct timespec *tv) {
-    if (inode.is_symlink) {
+static int utimensat_empty_nofollow(Inode &inode,
+                                    const struct timespec *tv)
+{
+    if (inode.is_symlink)
+    {
         /* Does not work on current kernels, but may in the future:
            https://marc.info/?l=linux-kernel&m=154158217810354&w=2 */
         auto res = utimensat(inode.fd, "", tv, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
-        if (res == -1 && errno == EINVAL) {
+        if (res == -1 && errno == EINVAL)
+        {
             /* Sorry, no race free way to set times on symlink. */
             errno = EPERM;
         }
@@ -238,17 +244,21 @@ static int utimensat_empty_nofollow(Inode& inode,
 }
 #endif
 
-
 static void do_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
-                       int valid, struct fuse_file_info* fi) {
-    Inode& inode = get_inode(ino);
+                       int valid, struct fuse_file_info *fi)
+{
+    Inode &inode = get_inode(ino);
     int ifd = inode.fd;
     int res;
 
-    if (valid & FUSE_SET_ATTR_MODE) {
-        if (fi) {
+    if (valid & FUSE_SET_ATTR_MODE)
+    {
+        if (fi)
+        {
             res = fchmod(fi->fh, attr->st_mode);
-        } else {
+        }
+        else
+        {
             char procname[64];
             sprintf(procname, "/proc/self/fd/%i", ifd);
             res = chmod(procname, attr->st_mode);
@@ -256,7 +266,8 @@ static void do_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
         if (res == -1)
             goto out_err;
     }
-    if (valid & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)) {
+    if (valid & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID))
+    {
         uid_t uid = (valid & FUSE_SET_ATTR_UID) ? attr->st_uid : static_cast<uid_t>(-1);
         gid_t gid = (valid & FUSE_SET_ATTR_GID) ? attr->st_gid : static_cast<gid_t>(-1);
 
@@ -264,10 +275,14 @@ static void do_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
         if (res == -1)
             goto out_err;
     }
-    if (valid & FUSE_SET_ATTR_SIZE) {
-        if (fi) {
+    if (valid & FUSE_SET_ATTR_SIZE)
+    {
+        if (fi)
+        {
             res = ftruncate(fi->fh, attr->st_size);
-        } else {
+        }
+        else
+        {
             char procname[64];
             sprintf(procname, "/proc/self/fd/%i", ifd);
             res = truncate(procname, attr->st_size);
@@ -275,7 +290,8 @@ static void do_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
         if (res == -1)
             goto out_err;
     }
-    if (valid & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME)) {
+    if (valid & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME))
+    {
         struct timespec tv[2];
 
         tv[0].tv_sec = 0;
@@ -295,7 +311,8 @@ static void do_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 
         if (fi)
             res = futimens(fi->fh, tv);
-        else {
+        else
+        {
 #ifdef HAVE_UTIMENSAT
             res = utimensat_empty_nofollow(inode, tv);
 #else
@@ -312,16 +329,16 @@ out_err:
     fuse_reply_err(req, errno);
 }
 
-
 static void sfs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
-                        int valid, fuse_file_info *fi) {
-    (void) ino;
+                        int valid, fuse_file_info *fi)
+{
+    (void)ino;
     do_setattr(req, ino, attr, valid, fi);
 }
 
-
 static int do_lookup(fuse_ino_t parent, const char *name,
-                     fuse_entry_param *e) {
+                     fuse_entry_param *e)
+{
     if (fs.debug)
         cerr << "DEBUG: lookup(): name=" << name
              << ", parent=" << parent << endl;
@@ -334,7 +351,8 @@ static int do_lookup(fuse_ino_t parent, const char *name,
         return errno;
 
     auto res = fstatat(newfd, "", &e->attr, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
-    if (res == -1) {
+    if (res == -1)
+    {
         auto saveerr = errno;
         close(newfd);
         if (fs.debug)
@@ -342,40 +360,49 @@ static int do_lookup(fuse_ino_t parent, const char *name,
         return saveerr;
     }
 
-    if (e->attr.st_dev != fs.src_dev) {
+    if (e->attr.st_dev != fs.src_dev)
+    {
         cerr << "WARNING: Mountpoints in the source directory tree will be hidden." << endl;
         return ENOTSUP;
-    } else if (e->attr.st_ino == FUSE_ROOT_ID) {
+    }
+    else if (e->attr.st_ino == FUSE_ROOT_ID)
+    {
         cerr << "ERROR: Source directory tree must not include inode "
              << FUSE_ROOT_ID << endl;
         return EIO;
     }
 
-    SrcId id {e->attr.st_ino, e->attr.st_dev};
-    unique_lock<mutex> fs_lock {fs.mutex};
-    Inode* inode_p;
-    try {
+    SrcId id{e->attr.st_ino, e->attr.st_dev};
+    unique_lock<mutex> fs_lock{fs.mutex};
+    Inode *inode_p;
+    try
+    {
         inode_p = &fs.inodes[id];
-    } catch (std::bad_alloc&) {
+    }
+    catch (std::bad_alloc &)
+    {
         return ENOMEM;
     }
     e->ino = reinterpret_cast<fuse_ino_t>(inode_p);
-    Inode& inode {*inode_p};
+    Inode &inode{*inode_p};
 
-    if(inode.fd != -1) { // found existing inode
+    if (inode.fd != -1)
+    { // found existing inode
         fs_lock.unlock();
         if (fs.debug)
             cerr << "DEBUG: lookup(): inode " << e->attr.st_ino
                  << " (userspace) already known." << endl;
-        lock_guard<mutex> g {inode.m};
+        lock_guard<mutex> g{inode.m};
         inode.nlookup++;
         close(newfd);
-    } else { // no existing inode
+    }
+    else
+    { // no existing inode
         /* This is just here to make Helgrind happy. It violates the
            lock ordering requirement (inode.m must be acquired before
            fs.mutex), but this is of no consequence because at this
            point no other thread has access to the inode mutex */
-        lock_guard<mutex> g {inode.m};
+        lock_guard<mutex> g{inode.m};
         inode.src_ino = e->attr.st_ino;
         inode.src_dev = e->attr.st_dev;
         inode.is_symlink = S_ISLNK(e->attr.st_mode);
@@ -391,30 +418,35 @@ static int do_lookup(fuse_ino_t parent, const char *name,
     return 0;
 }
 
-
-static void sfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    fuse_entry_param e {};
+static void sfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+    fuse_entry_param e{};
     auto err = do_lookup(parent, name, &e);
-    if (err == ENOENT) {
+    if (err == ENOENT)
+    {
         e.attr_timeout = fs.timeout;
         e.entry_timeout = fs.timeout;
         e.ino = e.attr.st_ino = 0;
         fuse_reply_entry(req, &e);
-    } else if (err) {
+    }
+    else if (err)
+    {
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
         fuse_reply_err(req, err);
-    } else {
+    }
+    else
+    {
         fuse_reply_entry(req, &e);
     }
 }
 
-
 static void mknod_symlink(fuse_req_t req, fuse_ino_t parent,
-                              const char *name, mode_t mode, dev_t rdev,
-                              const char *link) {
+                          const char *name, mode_t mode, dev_t rdev,
+                          const char *link)
+{
     int res;
-    Inode& inode_p = get_inode(parent);
+    Inode &inode_p = get_inode(parent);
     auto saverr = ENOMEM;
 
     if (S_ISDIR(mode))
@@ -441,29 +473,31 @@ out:
     fuse_reply_err(req, saverr);
 }
 
-
 static void sfs_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
-                      mode_t mode, dev_t rdev) {
+                      mode_t mode, dev_t rdev)
+{
     mknod_symlink(req, parent, name, mode, rdev, nullptr);
 }
 
-
 static void sfs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
-                      mode_t mode) {
+                      mode_t mode)
+{
     mknod_symlink(req, parent, name, S_IFDIR | mode, 0, nullptr);
 }
 
-
 static void sfs_symlink(fuse_req_t req, const char *link, fuse_ino_t parent,
-                        const char *name) {
+                        const char *name)
+{
     mknod_symlink(req, parent, name, S_IFLNK, 0, link);
 }
 
-
-static int linkat_empty_nofollow(Inode& inode, int dfd, const char *name) {
-    if (inode.is_symlink) {
+static int linkat_empty_nofollow(Inode &inode, int dfd, const char *name)
+{
+    if (inode.is_symlink)
+    {
         auto res = linkat(inode.fd, "", dfd, name, AT_EMPTY_PATH);
-        if (res == -1 && (errno == ENOENT || errno == EINVAL)) {
+        if (res == -1 && (errno == ENOENT || errno == EINVAL))
+        {
             /* Sorry, no race free way to hard-link a symlink. */
             errno = EOPNOTSUPP;
         }
@@ -475,30 +509,32 @@ static int linkat_empty_nofollow(Inode& inode, int dfd, const char *name) {
     return linkat(AT_FDCWD, procname, dfd, name, AT_SYMLINK_FOLLOW);
 }
 
-
 static void sfs_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t parent,
-                     const char *name) {
-    Inode& inode = get_inode(ino);
-    Inode& inode_p = get_inode(parent);
-    fuse_entry_param e {};
+                     const char *name)
+{
+    Inode &inode = get_inode(ino);
+    Inode &inode_p = get_inode(parent);
+    fuse_entry_param e{};
 
     e.attr_timeout = fs.timeout;
     e.entry_timeout = fs.timeout;
 
     auto res = linkat_empty_nofollow(inode, inode_p.fd, name);
-    if (res == -1) {
+    if (res == -1)
+    {
         fuse_reply_err(req, errno);
         return;
     }
 
     res = fstatat(inode.fd, "", &e.attr, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
-    if (res == -1) {
+    if (res == -1)
+    {
         fuse_reply_err(req, errno);
         return;
     }
     e.ino = reinterpret_cast<fuse_ino_t>(&inode);
     {
-        lock_guard<mutex> g {inode.m};
+        lock_guard<mutex> g{inode.m};
         inode.nlookup++;
     }
 
@@ -506,21 +542,22 @@ static void sfs_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t parent,
     return;
 }
 
-
-static void sfs_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    Inode& inode_p = get_inode(parent);
-    lock_guard<mutex> g {inode_p.m};
+static void sfs_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+    Inode &inode_p = get_inode(parent);
+    lock_guard<mutex> g{inode_p.m};
     auto res = unlinkat(inode_p.fd, name, AT_REMOVEDIR);
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
-
 static void sfs_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
                        fuse_ino_t newparent, const char *newname,
-                       unsigned int flags) {
-    Inode& inode_p = get_inode(parent);
-    Inode& inode_np = get_inode(newparent);
-    if (flags) {
+                       unsigned int flags)
+{
+    Inode &inode_p = get_inode(parent);
+    Inode &inode_np = get_inode(newparent);
+    if (flags)
+    {
         fuse_reply_err(req, EINVAL);
         return;
     }
@@ -529,90 +566,97 @@ static void sfs_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
-
-static void sfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    Inode& inode_p = get_inode(parent);
+static void sfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+    Inode &inode_p = get_inode(parent);
     auto res = unlinkat(inode_p.fd, name, 0);
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
+static void forget_one(fuse_ino_t ino, uint64_t n)
+{
+    Inode &inode = get_inode(ino);
+    unique_lock<mutex> l{inode.m};
 
-static void forget_one(fuse_ino_t ino, uint64_t n) {
-    Inode& inode = get_inode(ino);
-    unique_lock<mutex> l {inode.m};
-
-    if(n > inode.nlookup) {
+    if (n > inode.nlookup)
+    {
         cerr << "INTERNAL ERROR: Negative lookup count for inode "
              << inode.src_ino << endl;
         abort();
     }
     inode.nlookup -= n;
-    if (!inode.nlookup) {
+    if (!inode.nlookup)
+    {
         if (fs.debug)
             cerr << "DEBUG: forget: cleaning up inode " << inode.src_ino << endl;
         {
-            lock_guard<mutex> g_fs {fs.mutex};
+            lock_guard<mutex> g_fs{fs.mutex};
             l.unlock();
             fs.inodes.erase({inode.src_ino, inode.src_dev});
         }
-    } else if (fs.debug)
-            cerr << "DEBUG: forget: inode " << inode.src_ino
-                 << " lookup count now " << inode.nlookup << endl;
+    }
+    else if (fs.debug)
+        cerr << "DEBUG: forget: inode " << inode.src_ino
+             << " lookup count now " << inode.nlookup << endl;
 }
 
-static void sfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
+static void sfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup)
+{
     forget_one(ino, nlookup);
     fuse_reply_none(req);
 }
 
-
 static void sfs_forget_multi(fuse_req_t req, size_t count,
-                             fuse_forget_data *forgets) {
+                             fuse_forget_data *forgets)
+{
     for (int i = 0; i < count; i++)
         forget_one(forgets[i].ino, forgets[i].nlookup);
     fuse_reply_none(req);
 }
 
-
-static void sfs_readlink(fuse_req_t req, fuse_ino_t ino) {
-    Inode& inode = get_inode(ino);
+static void sfs_readlink(fuse_req_t req, fuse_ino_t ino)
+{
+    Inode &inode = get_inode(ino);
     char buf[PATH_MAX + 1];
     auto res = readlinkat(inode.fd, "", buf, sizeof(buf));
     if (res == -1)
         fuse_reply_err(req, errno);
     else if (res == sizeof(buf))
         fuse_reply_err(req, ENAMETOOLONG);
-    else {
+    else
+    {
         buf[res] = '\0';
         fuse_reply_readlink(req, buf);
     }
 }
 
-
-struct DirHandle {
-    DIR *dp {nullptr};
+struct DirHandle
+{
+    DIR *dp{nullptr};
     off_t offset;
 
     DirHandle() = default;
-    DirHandle(const DirHandle&) = delete;
-    DirHandle& operator=(const DirHandle&) = delete;
+    DirHandle(const DirHandle &) = delete;
+    DirHandle &operator=(const DirHandle &) = delete;
 
-    ~DirHandle() {
-        if(dp)
+    ~DirHandle()
+    {
+        if (dp)
             closedir(dp);
     }
 };
 
-
-static DirHandle *get_dir_handle(fuse_file_info *fi) {
-    return reinterpret_cast<DirHandle*>(fi->fh);
+static DirHandle *get_dir_handle(fuse_file_info *fi)
+{
+    return reinterpret_cast<DirHandle *>(fi->fh);
 }
 
-
-static void sfs_opendir(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
-    Inode& inode = get_inode(ino);
+static void sfs_opendir(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
+{
+    Inode &inode = get_inode(ino);
     auto d = new (nothrow) DirHandle;
-    if (d == nullptr) {
+    if (d == nullptr)
+    {
         fuse_reply_err(req, ENOMEM);
         return;
     }
@@ -620,7 +664,7 @@ static void sfs_opendir(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
     // Make Helgrind happy - it can't know that there's an implicit
     // synchronization due to the fact that other threads cannot
     // access d until we've called fuse_reply_*.
-    lock_guard<mutex> g {inode.m};
+    lock_guard<mutex> g{inode.m};
 
     auto fd = openat(inode.fd, ".", O_RDONLY);
     if (fd == -1)
@@ -629,13 +673,14 @@ static void sfs_opendir(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
     // On success, dir stream takes ownership of fd, so we
     // do not have to close it.
     d->dp = fdopendir(fd);
-    if(d->dp == nullptr)
+    if (d->dp == nullptr)
         goto out_errno;
 
     d->offset = 0;
 
     fi->fh = reinterpret_cast<uint64_t>(d);
-    if(fs.timeout) {
+    if (fs.timeout)
+    {
         fi->keep_cache = 1;
         fi->cache_readdir = 1;
     }
@@ -650,18 +695,18 @@ out_errno:
     fuse_reply_err(req, error);
 }
 
-
-static bool is_dot_or_dotdot(const char *name) {
+static bool is_dot_or_dotdot(const char *name)
+{
     return name[0] == '.' &&
            (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
 }
 
-
 static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
-                    off_t offset, fuse_file_info *fi, int plus) {
+                       off_t offset, fuse_file_info *fi, int plus)
+{
     auto d = get_dir_handle(fi);
-    Inode& inode = get_inode(ino);
-    lock_guard<mutex> g {inode.m};
+    Inode &inode = get_inode(ino);
+    lock_guard<mutex> g{inode.m};
     char *p;
     auto rem = size;
     int err = 0, count = 0;
@@ -671,25 +716,30 @@ static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
              << offset << endl;
 
     auto buf = new (nothrow) char[size];
-    if (!buf) {
+    if (!buf)
+    {
         fuse_reply_err(req, ENOMEM);
         return;
     }
     p = buf;
 
-    if (offset != d->offset) {
+    if (offset != d->offset)
+    {
         if (fs.debug)
             cerr << "DEBUG: readdir(): seeking to " << offset << endl;
         seekdir(d->dp, offset);
         d->offset = offset;
     }
 
-    while (1) {
+    while (1)
+    {
         struct dirent *entry;
         errno = 0;
         entry = readdir(d->dp);
-        if (!entry) {
-            if(errno) {
+        if (!entry)
+        {
+            if (errno)
+            {
                 err = errno;
                 if (fs.debug)
                     warn("DEBUG: readdir(): readdir failed with");
@@ -703,24 +753,29 @@ static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
         fuse_entry_param e{};
         size_t entsize;
-        if(plus) {
+        if (plus)
+        {
             err = do_lookup(ino, entry->d_name, &e);
             if (err)
                 goto error;
             entsize = fuse_add_direntry_plus(req, p, rem, entry->d_name, &e, entry->d_off);
 
-            if (entsize > rem) {
+            if (entsize > rem)
+            {
                 if (fs.debug)
                     cerr << "DEBUG: readdir(): buffer full, returning data. " << endl;
                 forget_one(e.ino, 1);
                 break;
             }
-        } else {
+        }
+        else
+        {
             e.attr.st_ino = entry->d_ino;
             e.attr.st_mode = entry->d_type << 12;
             entsize = fuse_add_direntry(req, p, rem, entry->d_name, &e.attr, entry->d_off);
 
-            if (entsize > rem) {
+            if (entsize > rem)
+            {
                 if (fs.debug)
                     cerr << "DEBUG: readdir(): buffer full, returning data. " << endl;
                 break;
@@ -730,7 +785,8 @@ static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         p += entsize;
         rem -= entsize;
         count++;
-        if (fs.debug) {
+        if (fs.debug)
+        {
             cerr << "DEBUG: readdir(): added to buffer: " << entry->d_name
                  << ", ino " << e.attr.st_ino << ", offset " << entry->d_off << endl;
         }
@@ -742,11 +798,14 @@ error:
     // any entries yet - otherwise we'd end up with wrong lookup
     // counts for the entries that are already in the buffer. So we
     // return what we've collected until that point.
-    if (err && rem == size) {
+    if (err && rem == size)
+    {
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
         fuse_reply_err(req, err);
-    } else {
+    }
+    else
+    {
         if (fs.debug)
             cerr << "DEBUG: readdir(): returning " << count
                  << " entries, curr offset " << d->offset << endl;
@@ -756,36 +815,37 @@ error:
     return;
 }
 
-
 static void sfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
-                        off_t offset, fuse_file_info *fi) {
+                        off_t offset, fuse_file_info *fi)
+{
     // operation logging is done in readdir to reduce code duplication
     do_readdir(req, ino, size, offset, fi, 0);
 }
 
-
 static void sfs_readdirplus(fuse_req_t req, fuse_ino_t ino, size_t size,
-                            off_t offset, fuse_file_info *fi) {
+                            off_t offset, fuse_file_info *fi)
+{
     // operation logging is done in readdir to reduce code duplication
     do_readdir(req, ino, size, offset, fi, 1);
 }
 
-
-static void sfs_releasedir(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
-    (void) ino;
+static void sfs_releasedir(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
+{
+    (void)ino;
     auto d = get_dir_handle(fi);
     delete d;
     fuse_reply_err(req, 0);
 }
 
-
 static void sfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
-                       mode_t mode, fuse_file_info *fi) {
-    Inode& inode_p = get_inode(parent);
+                       mode_t mode, fuse_file_info *fi)
+{
+    Inode &inode_p = get_inode(parent);
 
     auto fd = openat(inode_p.fd, name,
                      (fi->flags | O_CREAT) & ~O_NOFOLLOW, mode);
-    if (fd == -1) {
+    if (fd == -1)
+    {
         auto err = errno;
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
@@ -796,18 +856,20 @@ static void sfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     fi->fh = fd;
     fuse_entry_param e;
     auto err = do_lookup(parent, name, &e);
-    if (err) {
+    if (err)
+    {
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
         fuse_reply_err(req, err);
-    } else
+    }
+    else
         fuse_reply_create(req, &e, fi);
 }
 
-
 static void sfs_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
-                         fuse_file_info *fi) {
-    (void) ino;
+                         fuse_file_info *fi)
+{
+    (void)ino;
     int res;
     int fd = dirfd(get_dir_handle(fi)->dp);
     if (datasync)
@@ -817,13 +879,14 @@ static void sfs_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
-
-static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
-    Inode& inode = get_inode(ino);
+static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
+{
+    Inode &inode = get_inode(ino);
 
     /* With writeback cache, kernel may send read requests even
        when userspace opened write-only */
-    if (fs.timeout && (fi->flags & O_ACCMODE) == O_WRONLY) {
+    if (fs.timeout && (fi->flags & O_ACCMODE) == O_WRONLY)
+    {
         fi->flags &= ~O_ACCMODE;
         fi->flags |= O_RDWR;
     }
@@ -842,7 +905,8 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
     char buf[64];
     sprintf(buf, "/proc/self/fd/%i", inode.fd);
     auto fd = open(buf, fi->flags & ~O_NOFOLLOW);
-    if (fd == -1) {
+    if (fd == -1)
+    {
         auto err = errno;
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
@@ -855,24 +919,24 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
     fuse_reply_open(req, fi);
 }
 
-
-static void sfs_release(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
-    (void) ino;
+static void sfs_release(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
+{
+    (void)ino;
     close(fi->fh);
     fuse_reply_err(req, 0);
 }
 
-
-static void sfs_flush(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
-    (void) ino;
+static void sfs_flush(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
+{
+    (void)ino;
     auto res = close(dup(fi->fh));
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
-
 static void sfs_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
-                      fuse_file_info *fi) {
-    (void) ino;
+                      fuse_file_info *fi)
+{
+    (void)ino;
     int res;
     if (datasync)
         res = fdatasync(fi->fh);
@@ -881,8 +945,8 @@ static void sfs_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
-
-static void do_read(fuse_req_t req, size_t size, off_t off, fuse_file_info *fi) {
+static void do_read(fuse_req_t req, size_t size, off_t off, fuse_file_info *fi)
+{
 
     fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
     buf.buf[0].flags = static_cast<fuse_buf_flags>(
@@ -894,14 +958,15 @@ static void do_read(fuse_req_t req, size_t size, off_t off, fuse_file_info *fi) 
 }
 
 static void sfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
-                     fuse_file_info *fi) {
-    (void) ino;
+                     fuse_file_info *fi)
+{
+    (void)ino;
     do_read(req, size, off, fi);
 }
 
-
 static void do_write_buf(fuse_req_t req, size_t size, off_t off,
-                         fuse_bufvec *in_buf, fuse_file_info *fi) {
+                         fuse_bufvec *in_buf, fuse_file_info *fi)
+{
     fuse_bufvec out_buf = FUSE_BUFVEC_INIT(size);
     out_buf.buf[0].flags = static_cast<fuse_buf_flags>(
         FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK);
@@ -915,16 +980,16 @@ static void do_write_buf(fuse_req_t req, size_t size, off_t off,
         fuse_reply_write(req, (size_t)res);
 }
 
-
 static void sfs_write_buf(fuse_req_t req, fuse_ino_t ino, fuse_bufvec *in_buf,
-                          off_t off, fuse_file_info *fi) {
-    (void) ino;
-    auto size {fuse_buf_size(in_buf)};
+                          off_t off, fuse_file_info *fi)
+{
+    (void)ino;
+    auto size{fuse_buf_size(in_buf)};
     do_write_buf(req, size, off, in_buf, fi);
 }
 
-
-static void sfs_statfs(fuse_req_t req, fuse_ino_t ino) {
+static void sfs_statfs(fuse_req_t req, fuse_ino_t ino)
+{
     struct statvfs stbuf;
 
     auto res = fstatvfs(get_fs_fd(ino), &stbuf);
@@ -934,12 +999,13 @@ static void sfs_statfs(fuse_req_t req, fuse_ino_t ino) {
         fuse_reply_statfs(req, &stbuf);
 }
 
-
 #ifdef HAVE_POSIX_FALLOCATE
 static void sfs_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
-                          off_t offset, off_t length, fuse_file_info *fi) {
-    (void) ino;
-    if (mode) {
+                          off_t offset, off_t length, fuse_file_info *fi)
+{
+    (void)ino;
+    if (mode)
+    {
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
@@ -950,22 +1016,24 @@ static void sfs_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
 #endif
 
 static void sfs_flock(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi,
-                      int op) {
-    (void) ino;
+                      int op)
+{
+    (void)ino;
     auto res = flock(fi->fh, op);
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
-
 #ifdef HAVE_SETXATTR
 static void sfs_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
-                         size_t size) {
+                         size_t size)
+{
     char *value = nullptr;
-    Inode& inode = get_inode(ino);
+    Inode &inode = get_inode(ino);
     ssize_t ret;
     int saverr;
 
-    if (inode.is_symlink) {
+    if (inode.is_symlink)
+    {
         /* Sorry, no race free way to getxattr on symlink. */
         saverr = ENOTSUP;
         goto out;
@@ -974,9 +1042,11 @@ static void sfs_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
     char procname[64];
     sprintf(procname, "/proc/self/fd/%i", inode.fd);
 
-    if (size) {
+    if (size)
+    {
         value = new (nothrow) char[size];
-        if (value == nullptr) {
+        if (value == nullptr)
+        {
             saverr = ENOMEM;
             goto out;
         }
@@ -989,7 +1059,9 @@ static void sfs_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
             goto out;
 
         fuse_reply_buf(req, value, ret);
-    } else {
+    }
+    else
+    {
         ret = getxattr(procname, name, nullptr, 0);
         if (ret == -1)
             goto out_err;
@@ -1007,14 +1079,15 @@ out:
     goto out_free;
 }
 
-
-static void sfs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
+static void sfs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
+{
     char *value = nullptr;
-    Inode& inode = get_inode(ino);
+    Inode &inode = get_inode(ino);
     ssize_t ret;
     int saverr;
 
-    if (inode.is_symlink) {
+    if (inode.is_symlink)
+    {
         /* Sorry, no race free way to listxattr on symlink. */
         saverr = ENOTSUP;
         goto out;
@@ -1023,9 +1096,11 @@ static void sfs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
     char procname[64];
     sprintf(procname, "/proc/self/fd/%i", inode.fd);
 
-    if (size) {
+    if (size)
+    {
         value = new (nothrow) char[size];
-        if (value == nullptr) {
+        if (value == nullptr)
+        {
             saverr = ENOMEM;
             goto out;
         }
@@ -1038,7 +1113,9 @@ static void sfs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
             goto out;
 
         fuse_reply_buf(req, value, ret);
-    } else {
+    }
+    else
+    {
         ret = listxattr(procname, nullptr, 0);
         if (ret == -1)
             goto out_err;
@@ -1055,14 +1132,15 @@ out:
     goto out_free;
 }
 
-
 static void sfs_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
-                         const char *value, size_t size, int flags) {
-    Inode& inode = get_inode(ino);
+                         const char *value, size_t size, int flags)
+{
+    Inode &inode = get_inode(ino);
     ssize_t ret;
     int saverr;
 
-    if (inode.is_symlink) {
+    if (inode.is_symlink)
+    {
         /* Sorry, no race free way to setxattr on symlink. */
         saverr = ENOTSUP;
         goto out;
@@ -1078,14 +1156,15 @@ out:
     fuse_reply_err(req, saverr);
 }
 
-
-static void sfs_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
+static void sfs_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name)
+{
     char procname[64];
-    Inode& inode = get_inode(ino);
+    Inode &inode = get_inode(ino);
     ssize_t ret;
     int saverr;
 
-    if (inode.is_symlink) {
+    if (inode.is_symlink)
+    {
         /* Sorry, no race free way to setxattr on symlink. */
         saverr = ENOTSUP;
         goto out;
@@ -1100,8 +1179,8 @@ out:
 }
 #endif
 
-
-static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
+static void assign_operations(fuse_lowlevel_ops &sfs_oper)
+{
     sfs_oper.init = sfs_init;
     sfs_oper.lookup = sfs_lookup;
     sfs_oper.mkdir = sfs_mkdir;
@@ -1141,10 +1220,14 @@ static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
 #endif
 }
 
-static void maximize_fd_limit() {
-    struct rlimit lim {};
+static void maximize_fd_limit()
+{
+    struct rlimit lim
+    {
+    };
     auto res = getrlimit(RLIMIT_NOFILE, &lim);
-    if (res != 0) {
+    if (res != 0)
+    {
         warn("WARNING: getrlimit() failed with");
         return;
     }
@@ -1154,10 +1237,10 @@ static void maximize_fd_limit() {
         warn("WARNING: setrlimit() failed with");
 }
 
+int main(int argc, char *argv[])
+{
 
-int main(int argc, char *argv[]) {
-
-    fs.source = std::string {realpath(argv[1], NULL)};    
+    fs.source = std::string{realpath(argv[1], NULL)};
 
     // We need an fd for every dentry in our the filesystem that the
     // kernel knows about. This is way more than most processes need,
@@ -1190,7 +1273,7 @@ int main(int argc, char *argv[]) {
         /*|| fuse_opt_add_arg(&args, "-odebug")*/)
         errx(3, "ERROR: Out of memory");
 
-    fuse_lowlevel_ops sfs_oper {};
+    fuse_lowlevel_ops sfs_oper{};
     assign_operations(sfs_oper);
     auto se = fuse_session_new(&args, &sfs_oper, sizeof(sfs_oper), &fs);
     if (se == nullptr)
@@ -1208,7 +1291,7 @@ int main(int argc, char *argv[]) {
     loop_config.max_idle_threads = 10;
     if (fuse_session_mount(se, argv[2]) != 0)
         goto err_out3;
-    
+
     ret = fuse_session_loop_mt(se, &loop_config);
 
     fuse_session_unmount(se);
