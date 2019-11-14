@@ -26,4 +26,5 @@ add_executable(statesnap
 )
 
 target_link_libraries(statesnap
-    PkgConfig::FUSE_PKG)
+    PkgConfig::FUSE_PKG
+    sodium)

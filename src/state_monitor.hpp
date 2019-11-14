@@ -12,7 +12,7 @@ namespace fusefs
 
 struct state_file_info
 {
-    uint32_t original_blockcount;
+    off_t original_length;
     std::unordered_set<uint32_t> cached_blockids;
     std::string_view filepath;
     bool newblocks_added;

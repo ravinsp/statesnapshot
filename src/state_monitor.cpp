@@ -8,12 +8,14 @@
 #include <unordered_map>
 #include <cmath>
 #include "state_monitor.hpp"
+#include "hasher.hpp"
 
 namespace fusefs
 {
 
-const size_t BLOCK_SIZE = 4; // 4 * 1024 * 1024; // 4MB
-const int EXT_LEN = 8;
+constexpr size_t BLOCK_SIZE = 4; // 4 * 1024 * 1024; // 4MB
+constexpr size_t INDEX_ENTRY_SIZE = 44;
+constexpr size_t EXT_LEN = 8;
 const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
 
@@ -84,7 +86,7 @@ int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath
     if (fstat(fd, &stat_buf) == 0)
     {
         state_file_info &fileinfo = fileinfomap[filepath];
-        fileinfo.original_blockcount = ceil((double)stat_buf.st_size / (double)BLOCK_SIZE);
+        fileinfo.original_length = stat_buf.st_size;
         fileinfo.filepath = filepath;
         fileinfo.readfd = 0;
         fileinfo.cachefd = 0;
@@ -99,18 +101,14 @@ int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath
 
 int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t offset, const size_t length)
 {
-    uint64_t original_blocklen = fi.original_blockcount * BLOCK_SIZE;
+    uint32_t original_blockcount = ceil((double)fi.original_length / (double)BLOCK_SIZE);
 
-    // Check if offset is outside the original block length.
-    if (offset > original_blocklen || offset + length > original_blocklen)
-        fi.newblocks_added = true;
-
-    // Return of incoming write is outside of the original block length.
-    if (offset > original_blocklen)
+    // Return if incoming write is outside any of the original blocks.
+    if (offset > original_blockcount * BLOCK_SIZE)
         return 0;
 
     // Check whether we have already cached the entire file.
-    if (fi.original_blockcount == fi.cached_blockids.size())
+    if (original_blockcount == fi.cached_blockids.size())
         return 0;
 
     uint32_t startblock, endblock;
@@ -122,7 +120,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
     if (oflags & O_TRUNC)
     {
         startblock = 0;
-        endblock = fi.original_blockcount - 1;
+        endblock = original_blockcount - 1;
     }
     else
     {
@@ -130,7 +128,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
         endblock = (offset + length) / BLOCK_SIZE;
     }
 
-    for (int i = startblock; i <= endblock; i++)
+    for (uint32_t i = startblock; i <= endblock; i++)
     {
         // Check whether we have already cached the block.
         if (fi.cached_blockids.count(i) > 0)
@@ -140,10 +138,25 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
             return -1;
 
         // Read the block being replaced and send to cache file.
-        char buf[BLOCK_SIZE];
+        char blockbuf[BLOCK_SIZE];
         lseek(fi.readfd, BLOCK_SIZE * i, SEEK_SET);
-        read(fi.readfd, buf, BLOCK_SIZE);
-        write(fi.cachefd, buf, BLOCK_SIZE);
+        if (read(fi.readfd, blockbuf, BLOCK_SIZE) < 0)
+            return -1;
+        if (write(fi.cachefd, blockbuf, BLOCK_SIZE) < 0)
+            return -1;
+
+        // Append an entry into the cache index.
+        // format: [blockid(4 bytes) | cacheoffset(8 bytes) | blockhash(32 bytes)]
+
+        char entrybuf[INDEX_ENTRY_SIZE];
+        off_t cacheoffset = fi.cached_blockids.size() * BLOCK_SIZE;
+        hasher::B2H hash = hasher::hash(blockbuf, BLOCK_SIZE);
+        
+        memcpy(entrybuf, &i, 4);
+        memcpy(entrybuf + 4, &cacheoffset, 8);
+        memcpy(entrybuf + 12, hash.data, 32);
+        if (write(fi.indexfd, entrybuf, INDEX_ENTRY_SIZE) < 0)
+            return -1;
 
         fi.cached_blockids.emplace(i);
     }
@@ -176,10 +189,14 @@ int state_monitor::open_cachingfds(state_file_info &fi, const int originalfd)
         if (fi.cachefd <= 0)
             return -1;
 
-        tmppath.replace(tmppath.length() - EXT_LEN, EXT_LEN, BLOCKINDEX_EXT);
+        tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
         fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
         if (fi.indexfd <= 0)
             return -1;
+
+        // Write first entry to the index file. First entry is the length of the original file.
+        // This can be used when restoring/rolling back a file.
+        write(fi.indexfd, &fi.original_length, 8);
     }
 
     return 0;
