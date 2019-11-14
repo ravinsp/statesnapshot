@@ -19,6 +19,71 @@ constexpr size_t EXT_LEN = 8;
 const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
 
+void state_monitor::oncreate(int fd)
+{
+    std::lock_guard<std::mutex> lock(fmapmutex);
+
+    std::string filepath;
+    if (getpath_for_fd(filepath, fd) == 0)
+    {
+        std::cout << "Create: " << filepath << "\n";
+        state_file_info fi;
+        fi.isnew = true;
+        fileinfomap[filepath] = std::move(fi);
+    }
+}
+
+void state_monitor::ondelete(const char *filename, int parentfd)
+{
+    std::lock_guard<std::mutex> lock(fmapmutex);
+
+    char proclnk[32];
+    char parentpath[PATH_MAX];
+
+    sprintf(proclnk, "/proc/self/fd/%d", parentfd);
+    ssize_t parentlen = readlink(proclnk, parentpath, PATH_MAX);
+    if (parentlen > 0)
+    {
+        // Concat parent dir path and filename to get the full path.
+        std::string filepath;
+        filepath.reserve(parentlen + strlen(filename) + 1);
+        filepath.append(parentpath, parentlen).append("/").append(filename);
+
+        // Get the file path relative to the base directory.
+        std::cout << "Delete: " << filepath << "\n";
+
+        state_file_info *fi;
+
+        // Find out whether we are already tracking this file (eg. due to a previous write/create operation).
+        auto fitr = fileinfomap.find(filepath);
+        if (fitr != fileinfomap.end())
+            fi = &fitr->second;
+        else if (getfileinfo(&fi, filepath) != 0)
+            return;
+
+        cache_blocks(*fi, 0, fi->original_length);
+    }
+}
+
+void state_monitor::onopen(int fd)
+{
+    std::lock_guard<std::mutex> lock(fmapmutex);
+
+    std::string filepath;
+    if (getpath_for_fd(filepath, fd) == 0)
+    {
+        std::cout << "Open: " << filepath << "\n";
+
+        state_file_info *fi;
+        if (getfileinfo(&fi, filepath) == 0)
+        {
+            // Check whether fd is open in truncate mode.
+            int oflags = fcntl(fd, F_GETFL);
+            fi->istruncate = (oflags & O_TRUNC);
+        }
+    }
+}
+
 void state_monitor::onwrite(int fd, const off_t offset, const size_t length)
 {
     std::lock_guard<std::mutex> lock(fmapmutex);
@@ -26,11 +91,11 @@ void state_monitor::onwrite(int fd, const off_t offset, const size_t length)
     std::string filepath;
     if (getpath_for_fd(filepath, fd) == 0)
     {
+        std::cout << "Write: " << filepath << "\n";
+
         state_file_info *fi;
-        if (getfileinfo(&fi, filepath, fd) == 0)
-        {
-            cache_blocks(*fi, fd, offset, length);
-        }
+        if (getfileinfo(&fi, filepath) == 0)
+            cache_blocks(*fi, offset, length);
     }
 }
 
@@ -73,7 +138,7 @@ int state_monitor::getpath_for_fd(std::string &filepath, const int fd)
     return -1;
 }
 
-int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath, const int fd)
+int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath)
 {
     const auto itr = fileinfomap.find(filepath);
     if (itr != fileinfomap.end())
@@ -82,25 +147,28 @@ int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath
         return 0;
     }
 
+    state_file_info &fileinfo = fileinfomap[filepath];
+
     struct stat stat_buf;
-    if (fstat(fd, &stat_buf) == 0)
+    if (stat(filepath.c_str(), &stat_buf) == 0)
     {
-        state_file_info &fileinfo = fileinfomap[filepath];
+        std::cout << stat_buf.st_size << "\n";
         fileinfo.original_length = stat_buf.st_size;
-        fileinfo.filepath = filepath;
-        fileinfo.readfd = 0;
-        fileinfo.cachefd = 0;
-        fileinfo.indexfd = 0;
-
-        *fi = &fileinfo;
-        return 0;
     }
+    else
+        return -1;
 
-    return -1;
+    fileinfo.filepath = filepath;
+    *fi = &fileinfo;
+    return 0;
 }
 
-int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t offset, const size_t length)
+int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const size_t length)
 {
+    // No caching required if this is a new file created during this session.
+    if (fi.isnew)
+        return 0;
+
     uint32_t original_blockcount = ceil((double)fi.original_length / (double)BLOCK_SIZE);
 
     // Return if incoming write is outside any of the original blocks.
@@ -114,10 +182,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
     uint32_t startblock, endblock;
 
     // Calculate block ids to cache in this operation.
-    // Check whether fd is open in truncate mode. If so we need to cache the entire file
-    // before it gets overwritten.
-    int oflags = fcntl(fd, F_GETFL);
-    if (oflags & O_TRUNC)
+    if (fi.istruncate)
     {
         startblock = 0;
         endblock = original_blockcount - 1;
@@ -128,14 +193,16 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
         endblock = (offset + length) / BLOCK_SIZE;
     }
 
+    std::cout << "Cache blocks. flen:" << fi.original_length << "   " << offset << "," << length << "\n";
+
+    if (open_cachingfds(fi) != 0)
+        return -1;
+
     for (uint32_t i = startblock; i <= endblock; i++)
     {
         // Check whether we have already cached the block.
         if (fi.cached_blockids.count(i) > 0)
             continue;
-
-        if (open_cachingfds(fi, fd) != 0)
-            return -1;
 
         // Read the block being replaced and send to cache file.
         char blockbuf[BLOCK_SIZE];
@@ -151,7 +218,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
         char entrybuf[INDEX_ENTRY_SIZE];
         off_t cacheoffset = fi.cached_blockids.size() * BLOCK_SIZE;
         hasher::B2H hash = hasher::hash(blockbuf, BLOCK_SIZE);
-        
+
         memcpy(entrybuf, &i, 4);
         memcpy(entrybuf + 4, &cacheoffset, 8);
         memcpy(entrybuf + 12, hash.data, 32);
@@ -164,32 +231,31 @@ int state_monitor::cache_blocks(state_file_info &fi, const int fd, const off_t o
     return 0;
 }
 
-int state_monitor::open_cachingfds(state_file_info &fi, const int originalfd)
+int state_monitor::open_cachingfds(state_file_info &fi)
 {
     if (fi.readfd == 0)
     {
         // Open up the same file using an independent read-only fd.
-        char proclnk[32];
-        sprintf(proclnk, "/proc/self/fd/%d", originalfd);
-        fi.readfd = open(proclnk, O_RDWR); // Opening fd via /proc will create independent fd.
+        fi.readfd = open(fi.filepath.data(), O_RDWR);
         if (fi.readfd < 0)
             return -1;
-    }
 
-    if (fi.cachefd == 0)
-    {
-        // Get original filepath relative to the state directory.
-        std::string_view orifile = fi.filepath.substr(monitoreddir.length(), (fi.filepath.length() - monitoreddir.length()));
+        std::string_view relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
+        std::cout << relpath << "\n";
 
         std::string tmppath;
-        tmppath.reserve(scratchdir.length() + orifile.length() + EXT_LEN);
+        tmppath.reserve(scratchdir.length() + relpath.length() + EXT_LEN);
 
-        tmppath.append(scratchdir).append(orifile).append(BLOCKCACHE_EXT);
+        tmppath.append(scratchdir).append(relpath).append(BLOCKCACHE_EXT);
+        std::cout << tmppath << "\n";
+
         fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
         if (fi.cachefd <= 0)
             return -1;
 
         tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
+        std::cout << tmppath << "\n";
+
         fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
         if (fi.indexfd <= 0)
             return -1;

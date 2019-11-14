@@ -12,6 +12,8 @@ namespace fusefs
 
 struct state_file_info
 {
+    bool isnew;
+    bool istruncate;
     off_t original_length;
     std::unordered_set<uint32_t> cached_blockids;
     std::string_view filepath;
@@ -29,16 +31,18 @@ private:
     std::mutex fmapmutex;
 
     int getpath_for_fd(std::string &filepath, const int fd);
-    int getfileinfo(state_file_info **fileinfo, const std::string &filepath, const int fd);
-    int cache_blocks(state_file_info &fi, const int fd, const off_t offset, const size_t length);
+    int getfileinfo(state_file_info **fileinfo, const std::string &filepath);
+    int cache_blocks(state_file_info &fi, const off_t offset, const size_t length);
 
-    int open_cachingfds(state_file_info &fi, const int originalfd);
+    int open_cachingfds(state_file_info &fi);
     void close_cachingfds(state_file_info &fi);
 
-
 public:
-    std::string monitoreddir;
+    std::string statedir;
     std::string scratchdir;
+    void oncreate(int fd);
+    void onopen(int fd);
+    void ondelete(const char *filename, int parentfd);
     void onwrite(int fd, const off_t offset, const size_t length);
     void onclose(int fd);
 };

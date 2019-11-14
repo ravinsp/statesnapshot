@@ -533,6 +533,9 @@ static void sfs_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
 static void sfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     Inode &inode_p = get_inode(parent);
+
+    statemonitor.ondelete(name, inode_p.fd);
+
     auto res = unlinkat(inode_p.fd, name, 0);
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
@@ -827,7 +830,10 @@ static void sfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
         fuse_reply_err(req, err);
     }
     else
+    {
+        statemonitor.oncreate(fd);
         fuse_reply_create(req, &e, fi);
+    }
 }
 
 static void sfs_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
@@ -880,6 +886,9 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
 
     fi->keep_cache = (fs.timeout != 0);
     fi->fh = fd;
+
+    statemonitor.onopen(fd);
+
     fuse_reply_open(req, fi);
 }
 
@@ -1209,7 +1218,7 @@ int start(const char *arg0, const char *sourcedir, const char *mountpoint, const
 {
     fs.source = std::string{realpath(sourcedir, NULL)};
 
-    statemonitor.monitoreddir = fs.source;
+    statemonitor.statedir = fs.source;
     statemonitor.scratchdir = std::string{realpath(scratchdir, NULL)};
 
     // Initialize filesystem root
