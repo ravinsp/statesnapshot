@@ -1216,10 +1216,9 @@ void maximize_fd_limit()
 
 int start(const char *arg0, const char *sourcedir, const char *mountpoint, const char *scratchdir)
 {
-    fs.source = std::string{realpath(sourcedir, NULL)};
-
+    fs.source = std::string(sourcedir);
     statemonitor.statedir = fs.source;
-    statemonitor.scratchdir = std::string{realpath(scratchdir, NULL)};
+    statemonitor.scratchdir = std::string(scratchdir);
 
     // Initialize filesystem root
     fs.root.fd = -1;
@@ -1243,7 +1242,7 @@ int start(const char *arg0, const char *sourcedir, const char *mountpoint, const
     fuse_args args = FUSE_ARGS_INIT(0, nullptr);
     if (fuse_opt_add_arg(&args, arg0) ||
         fuse_opt_add_arg(&args, "-o") ||
-        fuse_opt_add_arg(&args, "default_permissions,fsname=fusefstest")
+        fuse_opt_add_arg(&args, "default_permissions,fsname=statefs")
         /*|| fuse_opt_add_arg(&args, "-odebug")*/)
         errx(3, "ERROR: Out of memory");
 

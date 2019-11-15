@@ -7,13 +7,14 @@
 #include <limits.h>
 #include <unordered_map>
 #include <cmath>
+#include <boost/filesystem.hpp>
 #include "state_monitor.hpp"
 #include "hasher.hpp"
 
 namespace fusefs
 {
 
-constexpr size_t BLOCK_SIZE = 4; // 4 * 1024 * 1024; // 4MB
+constexpr size_t BLOCK_SIZE = 4 * 1024 ;//* 1024; // 4MB
 constexpr size_t INDEX_ENTRY_SIZE = 44;
 constexpr size_t EXT_LEN = 8;
 const char *const BLOCKCACHE_EXT = ".bcache";
@@ -26,7 +27,6 @@ void state_monitor::oncreate(int fd)
     std::string filepath;
     if (getpath_for_fd(filepath, fd) == 0)
     {
-        std::cout << "Create: " << filepath << "\n";
         state_file_info fi;
         fi.isnew = true;
         fileinfomap[filepath] = std::move(fi);
@@ -49,9 +49,6 @@ void state_monitor::ondelete(const char *filename, int parentfd)
         filepath.reserve(parentlen + strlen(filename) + 1);
         filepath.append(parentpath, parentlen).append("/").append(filename);
 
-        // Get the file path relative to the base directory.
-        std::cout << "Delete: " << filepath << "\n";
-
         state_file_info *fi;
 
         // Find out whether we are already tracking this file (eg. due to a previous write/create operation).
@@ -72,8 +69,6 @@ void state_monitor::onopen(int fd)
     std::string filepath;
     if (getpath_for_fd(filepath, fd) == 0)
     {
-        std::cout << "Open: " << filepath << "\n";
-
         state_file_info *fi;
         if (getfileinfo(&fi, filepath) == 0)
         {
@@ -91,8 +86,6 @@ void state_monitor::onwrite(int fd, const off_t offset, const size_t length)
     std::string filepath;
     if (getpath_for_fd(filepath, fd) == 0)
     {
-        std::cout << "Write: " << filepath << "\n";
-
         state_file_info *fi;
         if (getfileinfo(&fi, filepath) == 0)
             cache_blocks(*fi, offset, length);
@@ -151,10 +144,7 @@ int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath
 
     struct stat stat_buf;
     if (stat(filepath.c_str(), &stat_buf) == 0)
-    {
-        std::cout << stat_buf.st_size << "\n";
         fileinfo.original_length = stat_buf.st_size;
-    }
     else
         return -1;
 
@@ -171,17 +161,13 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
 
     uint32_t original_blockcount = ceil((double)fi.original_length / (double)BLOCK_SIZE);
 
-    // Return if incoming write is outside any of the original blocks.
-    if (offset > original_blockcount * BLOCK_SIZE)
-        return 0;
-
     // Check whether we have already cached the entire file.
     if (original_blockcount == fi.cached_blockids.size())
         return 0;
 
     uint32_t startblock, endblock;
 
-    // Calculate block ids to cache in this operation.
+    // Check truncate mode.
     if (fi.istruncate)
     {
         startblock = 0;
@@ -189,18 +175,22 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     }
     else
     {
+        // Return if incoming write is outside any of the original blocks.
+        if (offset > original_blockcount * BLOCK_SIZE)
+            return 0;
+
         startblock = offset / BLOCK_SIZE;
         endblock = (offset + length) / BLOCK_SIZE;
     }
 
-    std::cout << "Cache blocks. flen:" << fi.original_length << "   " << offset << "," << length << "\n";
-
     if (open_cachingfds(fi) != 0)
         return -1;
 
+    std::cout << "Cache blocks: '" << fi.filepath << "' " << startblock << "," << endblock << "\n";
+
     for (uint32_t i = startblock; i <= endblock; i++)
     {
-        // Check whether we have already cached the block.
+        // Check whether we have already cached this block.
         if (fi.cached_blockids.count(i) > 0)
             continue;
 
@@ -236,33 +226,46 @@ int state_monitor::open_cachingfds(state_file_info &fi)
     if (fi.readfd == 0)
     {
         // Open up the same file using an independent read-only fd.
-        fi.readfd = open(fi.filepath.data(), O_RDWR);
+        fi.readfd = open(fi.filepath.c_str(), O_RDWR);
         if (fi.readfd < 0)
+        {
+            std::cout << "Failed to open " << fi.filepath << "\n";
             return -1;
+        }
 
-        std::string_view relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
-        std::cout << relpath << "\n";
+        std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
 
         std::string tmppath;
         tmppath.reserve(scratchdir.length() + relpath.length() + EXT_LEN);
 
         tmppath.append(scratchdir).append(relpath).append(BLOCKCACHE_EXT);
-        std::cout << tmppath << "\n";
+        // Create directory tree so we are able to create the cache and index files.
+        boost::filesystem::create_directories(boost::filesystem::path(tmppath).parent_path());
 
+        // Block cache file
         fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
         if (fi.cachefd <= 0)
+        {
+            std::cout << "Failed to open " << tmppath << "\n";
             return -1;
+        }
 
+        // Index file
         tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
-        std::cout << tmppath << "\n";
-
         fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
         if (fi.indexfd <= 0)
+        {
+            std::cout << "Failed to open " << tmppath << "\n";
             return -1;
+        }
 
         // Write first entry to the index file. First entry is the length of the original file.
         // This can be used when restoring/rolling back a file.
-        write(fi.indexfd, &fi.original_length, 8);
+        if (write(fi.indexfd, &fi.original_length, 8) == -1)
+        {
+            std::cout << "Error writing to index file " << tmppath << "\n";
+            return -1;
+        }
     }
 
     return 0;

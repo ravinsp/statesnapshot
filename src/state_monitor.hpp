@@ -16,7 +16,7 @@ struct state_file_info
     bool istruncate;
     off_t original_length;
     std::unordered_set<uint32_t> cached_blockids;
-    std::string_view filepath;
+    std::string filepath;
     bool newblocks_added;
     int readfd;
     int cachefd;
