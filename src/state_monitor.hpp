@@ -36,7 +36,7 @@ private:
     int getfileinfo(state_file_info **fileinfo, const std::string &filepath);
     int cache_blocks(state_file_info &fi, const off_t offset, const size_t length);
 
-    int open_cachingfds(state_file_info &fi);
+    int prepare_caching(state_file_info &fi);
     void close_cachingfds(state_file_info &fi);
     int write_touchedfileentry(std::string_view filepath);
     int write_newfileentry(std::string_view filepath);

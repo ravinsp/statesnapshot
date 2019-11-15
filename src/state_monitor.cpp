@@ -182,7 +182,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     if (original_blockcount == fi.cached_blockids.size())
         return 0;
 
-    if (open_cachingfds(fi) != 0 || write_touchedfileentry(fi.filepath) != 0)
+    if (prepare_caching(fi) != 0)
         return -1;
 
     uint32_t startblock, endblock;
@@ -205,6 +205,10 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
 
     std::cout << "Cache blocks: '" << fi.filepath << "' " << startblock << "," << endblock << "\n";
 
+    // If this is the first time we are caching this file, write an entry to the touched file index.
+    if (fi.cached_blockids.empty() && write_touchedfileentry(fi.filepath) != 0)
+        return -1;
+
     for (uint32_t i = startblock; i <= endblock; i++)
     {
         // Check whether we have already cached this block.
@@ -215,9 +219,15 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         char blockbuf[BLOCK_SIZE];
         lseek(fi.readfd, BLOCK_SIZE * i, SEEK_SET);
         if (read(fi.readfd, blockbuf, BLOCK_SIZE) < 0)
+        {
+            std::cout << "Read failed " << fi.filepath << "\n";
             return -1;
+        }
         if (write(fi.cachefd, blockbuf, BLOCK_SIZE) < 0)
+        {
+            std::cout << "Write to block cache failed\n";
             return -1;
+        }
 
         // Append an entry into the cache index.
         // format: [blockid(4 bytes) | cacheoffset(8 bytes) | blockhash(32 bytes)]
@@ -230,7 +240,10 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         memcpy(entrybuf + 4, &cacheoffset, 8);
         memcpy(entrybuf + 12, hash.data, 32);
         if (write(fi.indexfd, entrybuf, INDEX_ENTRY_SIZE) < 0)
+        {
+            std::cout << "Write to block index failed\n";
             return -1;
+        }
 
         fi.cached_blockids.emplace(i);
     }
@@ -238,7 +251,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     return 0;
 }
 
-int state_monitor::open_cachingfds(state_file_info &fi)
+int state_monitor::prepare_caching(state_file_info &fi)
 {
     if (fi.readfd == 0)
     {
@@ -276,7 +289,7 @@ int state_monitor::open_cachingfds(state_file_info &fi)
             return -1;
         }
 
-        // Write first entry to the index file. First entry is the length of the original file.
+        // Write first entry (8 bytes) to the index file. First entry is the length of the original file.
         // This can be used when restoring/rolling back a file.
         if (write(fi.indexfd, &fi.original_length, 8) == -1)
         {
@@ -317,8 +330,11 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
         }
     }
 
+    // Write the relative file path to the index.
+    filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
     write(touchedfileindexfd, filepath.data(), filepath.length());
     write(touchedfileindexfd, "\n", 1);
+    return 0;
 }
 
 int state_monitor::write_newfileentry(std::string_view filepath)
@@ -331,8 +347,12 @@ int state_monitor::write_newfileentry(std::string_view filepath)
         return -1;
     }
 
+    // Write the relative file path to the index.
+    filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
     write(fd, filepath.data(), filepath.length());
     write(fd, "\n", 1);
+    close(fd);
+    return 0;
 }
 
 void state_monitor::remove_newfileentry(std::string_view filepath)
@@ -344,7 +364,7 @@ void state_monitor::remove_newfileentry(std::string_view filepath)
     std::ofstream outfile(indexfile_tmp);
 
     bool linestransferred = false;
-    for (std::string line; std::getline(infile, line, '\n');)
+    for (std::string line; std::getline(infile, line);)
     {
         if (line != filepath) // Skip the file being removed.
         {
@@ -356,12 +376,12 @@ void state_monitor::remove_newfileentry(std::string_view filepath)
     infile.close();
     outfile.close();
 
-    remove(indexfile.c_str());
+    std::remove(indexfile.c_str());
 
     if (linestransferred)
-        rename(indexfile_tmp.c_str(), indexfile.c_str());
+        std::rename(indexfile_tmp.c_str(), indexfile.c_str());
     else
-        remove(indexfile_tmp.c_str());
+        std::remove(indexfile_tmp.c_str());
 }
 
 } // namespace fusefs

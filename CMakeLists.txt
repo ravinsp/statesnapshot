@@ -30,3 +30,7 @@ target_link_libraries(statesnap
     sodium
     boost_system
     boost_filesystem)
+
+add_executable(restore
+    src/restore.cpp
+)
