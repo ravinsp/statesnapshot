@@ -8,15 +8,19 @@
 #include <unordered_map>
 #include <cmath>
 #include <boost/filesystem.hpp>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include "state_monitor.hpp"
 #include "hasher.hpp"
 
 namespace fusefs
 {
 
-constexpr size_t BLOCK_SIZE = 4 * 1024 ;//* 1024; // 4MB
+constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
 constexpr size_t INDEX_ENTRY_SIZE = 44;
 constexpr size_t EXT_LEN = 8;
+constexpr int FILE_PERMS = 0644;
 const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
 
@@ -29,7 +33,9 @@ void state_monitor::oncreate(int fd)
     {
         state_file_info fi;
         fi.isnew = true;
+        fi.filepath = filepath;
         fileinfomap[filepath] = std::move(fi);
+        write_newfileentry(filepath);
     }
 }
 
@@ -54,9 +60,20 @@ void state_monitor::ondelete(const char *filename, int parentfd)
         // Find out whether we are already tracking this file (eg. due to a previous write/create operation).
         auto fitr = fileinfomap.find(filepath);
         if (fitr != fileinfomap.end())
+        {
             fi = &fitr->second;
+            if (fi->isnew)
+            {
+                // If it's a new file, remove from existing entries.
+                remove_newfileentry(fi->filepath);
+                fileinfomap.erase(fitr);
+                return;
+            }
+        }
         else if (getfileinfo(&fi, filepath) != 0)
+        {
             return;
+        }
 
         cache_blocks(*fi, 0, fi->original_length);
     }
@@ -165,6 +182,9 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     if (original_blockcount == fi.cached_blockids.size())
         return 0;
 
+    if (open_cachingfds(fi) != 0 || write_touchedfileentry(fi.filepath) != 0)
+        return -1;
+
     uint32_t startblock, endblock;
 
     // Check truncate mode.
@@ -182,9 +202,6 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         startblock = offset / BLOCK_SIZE;
         endblock = (offset + length) / BLOCK_SIZE;
     }
-
-    if (open_cachingfds(fi) != 0)
-        return -1;
 
     std::cout << "Cache blocks: '" << fi.filepath << "' " << startblock << "," << endblock << "\n";
 
@@ -243,7 +260,7 @@ int state_monitor::open_cachingfds(state_file_info &fi)
         boost::filesystem::create_directories(boost::filesystem::path(tmppath).parent_path());
 
         // Block cache file
-        fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
+        fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
         if (fi.cachefd <= 0)
         {
             std::cout << "Failed to open " << tmppath << "\n";
@@ -252,7 +269,7 @@ int state_monitor::open_cachingfds(state_file_info &fi)
 
         // Index file
         tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
-        fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT);
+        fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
         if (fi.indexfd <= 0)
         {
             std::cout << "Failed to open " << tmppath << "\n";
@@ -285,6 +302,66 @@ void state_monitor::close_cachingfds(state_file_info &fi)
     fi.readfd = 0;
     fi.cachefd = 0;
     fi.indexfd = 0;
+}
+
+int state_monitor::write_touchedfileentry(std::string_view filepath)
+{
+    if (touchedfileindexfd <= 0)
+    {
+        std::string indexfile = scratchdir + "/idxtouched.idx";
+        touchedfileindexfd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
+        if (touchedfileindexfd <= 0)
+        {
+            std::cout << "Failed to open " << indexfile << "\n";
+            return -1;
+        }
+    }
+
+    write(touchedfileindexfd, filepath.data(), filepath.length());
+    write(touchedfileindexfd, "\n", 1);
+}
+
+int state_monitor::write_newfileentry(std::string_view filepath)
+{
+    std::string indexfile = scratchdir + "/idxnew.idx";
+    int fd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
+    if (fd <= 0)
+    {
+        std::cout << "Failed to open " << indexfile << "\n";
+        return -1;
+    }
+
+    write(fd, filepath.data(), filepath.length());
+    write(fd, "\n", 1);
+}
+
+void state_monitor::remove_newfileentry(std::string_view filepath)
+{
+    std::string indexfile = scratchdir + "/idxnew.idx";
+    std::string indexfile_tmp = scratchdir + "/idxnew.idx.tmp";
+
+    std::ifstream infile(indexfile);
+    std::ofstream outfile(indexfile_tmp);
+
+    bool linestransferred = false;
+    for (std::string line; std::getline(infile, line, '\n');)
+    {
+        if (line != filepath) // Skip the file being removed.
+        {
+            outfile << line << "\n";
+            linestransferred = true;
+        }
+    }
+
+    infile.close();
+    outfile.close();
+
+    remove(indexfile.c_str());
+
+    if (linestransferred)
+        rename(indexfile_tmp.c_str(), indexfile.c_str());
+    else
+        remove(indexfile_tmp.c_str());
 }
 
 } // namespace fusefs

@@ -17,7 +17,6 @@ struct state_file_info
     off_t original_length;
     std::unordered_set<uint32_t> cached_blockids;
     std::string filepath;
-    bool newblocks_added;
     int readfd;
     int cachefd;
     int indexfd;
@@ -28,7 +27,10 @@ class state_monitor
 private:
     std::unordered_map<int, std::string> fdpathmap;
     std::unordered_map<std::string, state_file_info> fileinfomap;
+    std::unordered_set<std::string> touchedfiles;
     std::mutex fmapmutex;
+
+    int touchedfileindexfd = 0;
 
     int getpath_for_fd(std::string &filepath, const int fd);
     int getfileinfo(state_file_info **fileinfo, const std::string &filepath);
@@ -36,6 +38,9 @@ private:
 
     int open_cachingfds(state_file_info &fi);
     void close_cachingfds(state_file_info &fi);
+    int write_touchedfileentry(std::string_view filepath);
+    int write_newfileentry(std::string_view filepath);
+    void remove_newfileentry(std::string_view filepath);
 
 public:
     std::string statedir;
