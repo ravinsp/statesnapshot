@@ -960,7 +960,9 @@ static void sfs_write_buf(fuse_req_t req, fuse_ino_t ino, fuse_bufvec *in_buf,
     (void)ino;
     auto size{fuse_buf_size(in_buf)};
 
-    statemonitor.onwrite(fi->fh, off, size);
+    // The file cannot be read until this 10 seconds passes.
+    sleep(10);
+    // statemonitor.onwrite(fi->fh, off, size);
 
     do_write_buf(req, size, off, in_buf, fi);
 }

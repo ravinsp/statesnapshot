@@ -2,7 +2,7 @@
 #include <string>
 #include <cstring>
 #include <unistd.h>
-#include <sys/types.h>
+#include <fcntl.h>
 #include <fstream>
 #include <unordered_set>
 #include <vector>
@@ -13,6 +13,8 @@ const char *const IDX_NEWFILES = "/idxnew.idx";
 const char *const IDX_TOUCHEDFILES = "/idxtouched.idx";
 const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
+constexpr uint8_t BLOCKINDEX_ENTRY_SIZE = 44;
+constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
 
 // Look at new files added and delete them if still exist.
 void delete_newfiles(const char *statedir, const char *chkpntdir)
@@ -52,18 +54,68 @@ int read_blockindex(std::vector<char> &buffer, std::string_view file, const char
 
 int restore_blocks(std::string_view file, const std::vector<char> &bindex, const char *statedir, const char *chkpntdir)
 {
-    std::string bcachefile(chkpntdir);
-    bcachefile.append(file).append(BLOCKCACHE_EXT);
+    int bcachefd = 0, orifilefd = 0;
+    const char *idxptr = bindex.data();
 
-    std::string originalfile(statedir);
-    originalfile.append(file);
+    // First 8 bytes of the index contains the supposed length of the original file.
+    off_t originallen = 0;
+    memcpy(&originallen, idxptr, 8);
 
-    // First 8 bytes contain the supposed length of the original file.
-    off_t originallen;
-    memcpy(&originallen, bindex.data(), 8);
+    // Open block cache file.
+    {
+        std::string bcachefile(chkpntdir);
+        bcachefile.append(file).append(BLOCKCACHE_EXT);
+        bcachefd = open(bcachefile.c_str(), O_RDONLY);
+        if (bcachefd <= 0)
+        {
+            std::cout << "Error opening " << bcachefile << "\n";
+            return -1;
+        }
+    }
 
-    // If the current file is bigger, truncate it to the original size.
-    truncate(originalfile.c_str(), originallen);
+    // Open original file.
+    {
+        std::string originalfile(statedir);
+        originalfile.append(file);
+
+        orifilefd = open(originalfile.c_str(), O_RDONLY | O_CREAT, 0644);
+        if (orifilefd <= 0)
+        {
+            std::cout << "Error opening " << originalfile << "\n";
+            return -1;
+        }
+    }
+
+    // Restore the blocks as specified in block index.
+    for (uint32_t idxoffset = 8; idxoffset < bindex.size();)
+    {
+        // Find the block no. of where this block is from in the original file.
+        uint32_t blockno = 0;
+        memcpy(&blockno, idxptr + idxoffset, 4);
+        idxoffset += 4;
+        off_t orifileoffset = blockno * BLOCK_SIZE;
+
+        // Find the offset where the block is located in the block cache file.
+        off_t bcacheoffset;
+        memcpy(&bcacheoffset, idxptr + idxoffset, 8);
+        idxoffset += 40; // Skip the hash(32)
+
+        std::cout << "oo:" << orifileoffset << " bco:" << bcacheoffset << "\n";
+
+        char buf[32];
+        lseek(bcachefd, bcacheoffset, SEEK_SET);
+        read(bcachefd, buf, 32);
+        std::cout << buf << "\n";
+
+        // Transfer the cached block to the target file.
+        //copy_file_range(bcachefd, &bcacheoffset, orifilefd, &orifileoffset, BLOCK_SIZE, 0);
+    }
+
+    // If the target file is bigger than the original size, truncate it to the original size.
+    // ftruncate(orifilefd, originallen);
+
+    close(bcachefd);
+    close(orifilefd);
 
     return 0;
 }

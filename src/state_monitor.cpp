@@ -18,7 +18,7 @@ namespace fusefs
 {
 
 constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
-constexpr size_t INDEX_ENTRY_SIZE = 44;
+constexpr size_t BLOCKINDEX_ENTRY_SIZE = 44;
 constexpr size_t EXT_LEN = 8;
 constexpr int FILE_PERMS = 0644;
 const char *const BLOCKCACHE_EXT = ".bcache";
@@ -203,7 +203,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         endblock = (offset + length) / BLOCK_SIZE;
     }
 
-    std::cout << "Cache blocks: '" << fi.filepath << "' " << startblock << "," << endblock << "\n";
+    std::cout << "Cache blocks: '" << fi.filepath << "' [" << offset << "," << length << "] " << startblock << "," << endblock << "\n";
 
     // If this is the first time we are caching this file, write an entry to the touched file index.
     if (fi.cached_blockids.empty() && write_touchedfileentry(fi.filepath) != 0)
@@ -218,28 +218,29 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         // Read the block being replaced and send to cache file.
         char blockbuf[BLOCK_SIZE];
         lseek(fi.readfd, BLOCK_SIZE * i, SEEK_SET);
-        if (read(fi.readfd, blockbuf, BLOCK_SIZE) < 0)
+        if (read(fi.readfd, blockbuf, 32) <= 0)
         {
             std::cout << "Read failed " << fi.filepath << "\n";
             return -1;
         }
+        
         if (write(fi.cachefd, blockbuf, BLOCK_SIZE) < 0)
         {
             std::cout << "Write to block cache failed\n";
             return -1;
         }
 
-        // Append an entry into the cache index.
-        // format: [blockid(4 bytes) | cacheoffset(8 bytes) | blockhash(32 bytes)]
+        // Append an entry (44 bytes) into the cache index.
+        // Entry format: [blocknum(4 bytes) | cacheoffset(8 bytes) | blockhash(32 bytes)]
 
-        char entrybuf[INDEX_ENTRY_SIZE];
+        char entrybuf[BLOCKINDEX_ENTRY_SIZE];
         off_t cacheoffset = fi.cached_blockids.size() * BLOCK_SIZE;
         hasher::B2H hash = hasher::hash(blockbuf, BLOCK_SIZE);
 
         memcpy(entrybuf, &i, 4);
         memcpy(entrybuf + 4, &cacheoffset, 8);
         memcpy(entrybuf + 12, hash.data, 32);
-        if (write(fi.indexfd, entrybuf, INDEX_ENTRY_SIZE) < 0)
+        if (write(fi.indexfd, entrybuf, BLOCKINDEX_ENTRY_SIZE) < 0)
         {
             std::cout << "Write to block index failed\n";
             return -1;
@@ -255,14 +256,14 @@ int state_monitor::prepare_caching(state_file_info &fi)
 {
     if (fi.readfd == 0)
     {
-        // Open up the same file using an independent read-only fd.
-        fi.readfd = open(fi.filepath.c_str(), O_RDWR);
+        // Open up the file using a read-only fd.
+        fi.readfd = open(fi.filepath.c_str(), O_RDONLY);
         if (fi.readfd < 0)
         {
             std::cout << "Failed to open " << fi.filepath << "\n";
             return -1;
         }
-
+        
         std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
 
         std::string tmppath;
