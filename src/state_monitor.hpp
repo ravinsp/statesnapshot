@@ -11,6 +11,7 @@
 namespace fusefs
 {
 
+// Holds information about an original file in state that we are tracking.
 struct state_file_info
 {
     bool isnew;
@@ -22,20 +23,32 @@ struct state_file_info
     int indexfd;
 };
 
+// Invoked by fuse file system for relevent file system calls.
 class state_monitor
 {
 private:
+    // Map of fd-->filepath
     std::unordered_map<int, std::string> fdpathmap;
+    
+    // Map of filepath-->fileinfo
     std::unordered_map<std::string, state_file_info> fileinfomap;
-    std::unordered_set<std::string> touchedfiles;
-    std::unordered_set<std::string> created_dirs;
-    std::mutex fmapmutex;
 
+    // Complete list of modified files during the session.
+    std::unordered_set<std::string> touchedfiles;
+
+    // List of new cache sub directories created during the session.
+    std::unordered_set<std::string> created_cachesubdirs;
+
+    // Mutex to synchronize parallel file system calls into our custom state tracking logic.
+    std::mutex monitor_mutex;
+
+    // Holds the fd used to write into modified files index. This will be kept open for the entire
+    // life of the state monitor.
     int touchedfileindexfd = 0;
 
-    int getpath_for_fd(std::string &filepath, const int fd);
-    int getmappedpath_for_fd(std::string &filepath, const int fd);
-    int getfileinfo(state_file_info **fileinfo, const std::string &filepath);
+    int extract_filepath(std::string &filepath, const int fd);
+    int get_fd_filepath(std::string &filepath, const int fd);
+    int get_tracked_fileinfo(state_file_info **fileinfo, const std::string &filepath);
     int cache_blocks(state_file_info &fi, const off_t offset, const size_t length);
 
     int prepare_caching(state_file_info &fi);
@@ -46,7 +59,7 @@ private:
 
 public:
     std::string statedir;
-    std::string scratchdir;
+    std::string cachedir;
     void oncreate(const int fd);
     void onopen(const int inodefd, const int flags);
     void onwrite(const int fd, const off_t offset, const size_t length);

@@ -21,16 +21,16 @@ int main(int argc, char *argv[])
 
     const char *sourcedir = argv[1];
     const char *mountpoint = argv[2];
-    const char *scratchdir = argv[3];
+    const char *cachedir = argv[3];
 
     boost::filesystem::create_directories(mountpoint);
-    boost::filesystem::create_directories(scratchdir);
+    boost::filesystem::create_directories(cachedir);
 
     //fusethread = std::thread([&] {
     fusefs::start(argv[0],
                   realpath(sourcedir, NULL),
                   realpath(mountpoint, NULL),
-                  realpath(scratchdir, NULL));
+                  realpath(cachedir, NULL));
     //});
 
     //fusethread.join();

@@ -17,39 +17,49 @@
 namespace fusefs
 {
 
+// Cache block size.
 constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
+
+// Cache block index entry bytes length.
 constexpr size_t BLOCKINDEX_ENTRY_SIZE = 44;
-constexpr size_t EXT_LEN = 8;
+
+// Permissions used when creating block cache and index files.
 constexpr int FILE_PERMS = 0644;
+
+constexpr size_t EXT_LEN = 8;
 const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
 
 void state_monitor::oncreate(const int fd)
 {
-    std::lock_guard<std::mutex> lock(fmapmutex);
+    std::lock_guard<std::mutex> lock(monitor_mutex);
 
     std::string filepath;
-    if (getmappedpath_for_fd(filepath, fd) == 0)
+    if (get_fd_filepath(filepath, fd) == 0)
     {
+        // Add an entry for the new file in the file info map. This information will be used to ignore
+        // future operations (eg. write/delete) done to this file.
         state_file_info fi;
         fi.isnew = true;
         fi.filepath = filepath;
         fileinfomap[filepath] = std::move(fi);
+
+        // Add to the list of new files added during this session.
         write_newfileentry(filepath);
     }
 }
 
 void state_monitor::onopen(const int inodefd, const int flags)
 {
-    std::lock_guard<std::mutex> lock(fmapmutex);
+    std::lock_guard<std::mutex> lock(monitor_mutex);
 
     std::string filepath;
-    if (getpath_for_fd(filepath, inodefd) == 0)
+    if (extract_filepath(filepath, inodefd) == 0)
     {
         state_file_info *fi;
-        if (getfileinfo(&fi, filepath) == 0)
+        if (get_tracked_fileinfo(&fi, filepath) == 0)
         {
-            // Check whether fd is open in truncate mode. If so cache the file immediately.
+            // Check whether fd is open in truncate mode. If so cache the entire file immediately.
             if (flags & O_TRUNC)
                 cache_blocks(*fi, 0, fi->original_length);
         }
@@ -58,24 +68,24 @@ void state_monitor::onopen(const int inodefd, const int flags)
 
 void state_monitor::onwrite(const int fd, const off_t offset, const size_t length)
 {
-    std::lock_guard<std::mutex> lock(fmapmutex);
+    std::lock_guard<std::mutex> lock(monitor_mutex);
 
     std::string filepath;
-    if (getmappedpath_for_fd(filepath, fd) == 0)
+    if (get_fd_filepath(filepath, fd) == 0)
     {
         state_file_info *fi;
-        if (getfileinfo(&fi, filepath) == 0)
+        if (get_tracked_fileinfo(&fi, filepath) == 0)
             cache_blocks(*fi, offset, length);
     }
 }
 
 void state_monitor::ondelete(const char *filename, const int parentfd)
 {
-    std::lock_guard<std::mutex> lock(fmapmutex);
+    std::lock_guard<std::mutex> lock(monitor_mutex);
 
+    // Get parent directory path using the parentfd.
     char proclnk[32];
     char parentpath[PATH_MAX];
-
     sprintf(proclnk, "/proc/self/fd/%d", parentfd);
     ssize_t parentlen = readlink(proclnk, parentpath, PATH_MAX);
     if (parentlen > 0)
@@ -86,47 +96,46 @@ void state_monitor::ondelete(const char *filename, const int parentfd)
         filepath.append(parentpath, parentlen).append("/").append(filename);
 
         state_file_info *fi;
-
-        // Find out whether we are already tracking this file (eg. due to a previous write/create operation).
-        auto fitr = fileinfomap.find(filepath);
-        if (fitr != fileinfomap.end())
+        if (get_tracked_fileinfo(&fi, filepath) == 0)
         {
-            fi = &fitr->second;
             if (fi->isnew)
             {
-                // If it's a new file, remove from existing entries.
+                // If this is a new file, just remove from existing index entries.
+                // No need to cache the file blocks.
                 remove_newfileentry(fi->filepath);
-                fileinfomap.erase(fitr);
-                return;
+                fileinfomap.erase(filepath);
+            }
+            else
+            {
+                // If not a new file, cache the entire file.
+                cache_blocks(*fi, 0, fi->original_length);
             }
         }
-        else if (getfileinfo(&fi, filepath) != 0)
-        {
-            return;
-        }
-
-        cache_blocks(*fi, 0, fi->original_length);
     }
 }
 
 void state_monitor::ontruncate(const int fd, const off_t newsize)
 {
+    std::lock_guard<std::mutex> lock(monitor_mutex);
+
     std::string filepath;
-    if (getmappedpath_for_fd(filepath, fd) == 0)
+    if (get_fd_filepath(filepath, fd) == 0)
     {
+        // If truncated size is less than the original, cache the entire file.
         state_file_info *fi;
-        if (getfileinfo(&fi, filepath) == 0 && newsize < fi->original_length)
+        if (get_tracked_fileinfo(&fi, filepath) == 0 && newsize < fi->original_length)
             cache_blocks(*fi, 0, fi->original_length);
     }
 }
 
 void state_monitor::onclose(const int fd)
 {
-    std::lock_guard<std::mutex> lock(fmapmutex);
+    std::lock_guard<std::mutex> lock(monitor_mutex);
 
     auto pitr = fdpathmap.find(fd);
     if (pitr != fdpathmap.end())
     {
+        // Close any block cache/index fds we have opened for this file.
         auto fitr = fileinfomap.find(pitr->second); // pitr->second is the filepath string.
         if (fitr != fileinfomap.end())
             close_cachingfds(fitr->second); // fitr->second is the fileinfo struct.
@@ -135,7 +144,13 @@ void state_monitor::onclose(const int fd)
     }
 }
 
-int state_monitor::getpath_for_fd(std::string &filepath, const int fd)
+/**
+ * Extracts the full physical file path for a given fd.
+ * @param filepath String to assign the extracted file path.
+ * @param fd The file descriptor to find the filepath.
+ * @return 0 on successful file path extraction. -1 on failure.
+ */
+int state_monitor::extract_filepath(std::string &filepath, const int fd)
 {
     char proclnk[32];
     sprintf(proclnk, "/proc/self/fd/%d", fd);
@@ -150,7 +165,13 @@ int state_monitor::getpath_for_fd(std::string &filepath, const int fd)
     return -1;
 }
 
-int state_monitor::getmappedpath_for_fd(std::string &filepath, const int fd)
+/**
+ * Find the full physical file path for a given fd using the fd map.
+ * @param filepath String to assign the extracted file path.
+ * @param fd The file descriptor to find the filepath.
+ * @return 0 on successful file path extraction. -1 on failure.
+ */
+int state_monitor::get_fd_filepath(std::string &filepath, const int fd)
 {
     // Return path from the map if found.
     const auto itr = fdpathmap.find(fd);
@@ -160,7 +181,8 @@ int state_monitor::getmappedpath_for_fd(std::string &filepath, const int fd)
         return 0;
     }
 
-    if (getpath_for_fd(filepath, fd) == 0)
+    // Extract the file path and populate the fd-->filepath map.
+    if (extract_filepath(filepath, fd) == 0)
     {
         fdpathmap[fd] = filepath;
         return 0;
@@ -169,8 +191,15 @@ int state_monitor::getmappedpath_for_fd(std::string &filepath, const int fd)
     return -1;
 }
 
-int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath)
+/**
+ * Finds the tracked state file information for the given filepath.
+ * @param fi Reference pointer to assign the state file info struct.
+ * @param filepath Full physical path of the file.
+ * @return 0 on successful find. -1 on failure.
+ */
+int state_monitor::get_tracked_fileinfo(state_file_info **fi, const std::string &filepath)
 {
+    // Return from filepath-->fileinfo map if found.
     const auto itr = fileinfomap.find(filepath);
     if (itr != fileinfomap.end())
     {
@@ -178,19 +207,30 @@ int state_monitor::getfileinfo(state_file_info **fi, const std::string &filepath
         return 0;
     }
 
+    // Initialize a new state file info struct for the given filepath.
     state_file_info &fileinfo = fileinfomap[filepath];
 
+    // We use stat() to find out the length of the file.
     struct stat stat_buf;
-    if (stat(filepath.c_str(), &stat_buf) == 0)
-        fileinfo.original_length = stat_buf.st_size;
-    else
+    if (stat(filepath.c_str(), &stat_buf) != 0)
+    {
+        std::cerr << "Error occured in stat() of " << filepath << "\n";
         return -1;
+    }
 
+    fileinfo.original_length = stat_buf.st_size;
     fileinfo.filepath = filepath;
     *fi = &fileinfo;
     return 0;
 }
 
+/**
+ * Caches the specified bytes range of the given file.
+ * @param fi The file info struct pointing to the file to be cached.
+ * @param offset The start byte position for caching.
+ * @param length How many bytes to cache.
+ * @return 0 on successful execution. -1 on failure.
+ */
 int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const size_t length)
 {
     // No caching required if this is a new file created during this session.
@@ -203,6 +243,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     if (original_blockcount == fi.cached_blockids.size())
         return 0;
 
+    // Initialize fds and indexes required for caching.
     if (prepare_caching(fi) != 0)
         return -1;
 
@@ -213,7 +254,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     uint32_t startblock = offset / BLOCK_SIZE;
     uint32_t endblock = (offset + length) / BLOCK_SIZE;
 
-    std::cout << "Cache blocks: '" << fi.filepath << "' [" << offset << "," << length << "] " << startblock << "," << endblock << "\n";
+    // std::cout << "Cache blocks: '" << fi.filepath << "' [" << offset << "," << length << "] " << startblock << "," << endblock << "\n";
 
     // If this is the first time we are caching this file, write an entry to the touched file index.
     if (fi.cached_blockids.empty() && write_touchedfileentry(fi.filepath) != 0)
@@ -221,7 +262,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
 
     for (uint32_t i = startblock; i <= endblock; i++)
     {
-        // Check whether we have already cached this block.
+        // Skip if we have already cached this block.
         if (fi.cached_blockids.count(i) > 0)
             continue;
 
@@ -229,17 +270,19 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         char blockbuf[BLOCK_SIZE];
         if (pread(fi.readfd, blockbuf, BLOCK_SIZE, BLOCK_SIZE * i) <= 0)
         {
-            std::cout << "Read failed " << fi.filepath << "\n";
+            std::cerr << "Read failed " << fi.filepath << "\n";
             return -1;
         }
 
         if (write(fi.cachefd, blockbuf, BLOCK_SIZE) < 0)
         {
-            std::cout << "Write to block cache failed\n";
+            std::cerr << "Write to block cache failed\n";
             return -1;
         }
 
-        // Append an entry (44 bytes) into the cache index.
+        // Append an entry (44 bytes) into the block cache index. We maintain this index to
+        // help random block access for external use cases. We currently do not sort this index here.
+        // Whoever is using the index must sort it if required.
         // Entry format: [blocknum(4 bytes) | cacheoffset(8 bytes) | blockhash(32 bytes)]
 
         char entrybuf[BLOCKINDEX_ENTRY_SIZE];
@@ -251,72 +294,84 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         memcpy(entrybuf + 12, hash.data, 32);
         if (write(fi.indexfd, entrybuf, BLOCKINDEX_ENTRY_SIZE) < 0)
         {
-            std::cout << "Write to block index failed\n";
+            std::cerr << "Write to block index failed\n";
             return -1;
         }
 
+        // Mark the block as cached.
         fi.cached_blockids.emplace(i);
     }
 
     return 0;
 }
 
+/**
+ * Initializes fds and indexes required for caching.
+ * @param fi The state file info struct pointing to the file being cached.
+ * @return 0 on succesful initialization. -1 on failure.
+ */
 int state_monitor::prepare_caching(state_file_info &fi)
 {
-    if (fi.readfd == 0)
+    // If readfd is greater than 0 then we take it as caching being already initialized.
+    if (fi.readfd > 0)
+        return 0;
+
+    // Open up the file using a read-only fd. This fd will be used to fetch blocks to be cached.
+    fi.readfd = open(fi.filepath.c_str(), O_RDONLY);
+    if (fi.readfd < 0)
     {
-        // Open up the file using a read-only fd.
-        fi.readfd = open(fi.filepath.c_str(), O_RDONLY);
-        if (fi.readfd < 0)
-        {
-            std::cout << "Failed to open " << fi.filepath << "\n";
-            return -1;
-        }
+        std::cerr << "Failed to open " << fi.filepath << "\n";
+        return -1;
+    }
 
-        std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
+    // Get the path of the file relative to the state dir. We maintain this same reative path for the
+    // corresponding cache and index files in the cache dir.
+    std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
 
-        std::string tmppath;
-        tmppath.reserve(scratchdir.length() + relpath.length() + EXT_LEN);
+    std::string tmppath;
+    tmppath.reserve(cachedir.length() + relpath.length() + EXT_LEN);
 
-        tmppath.append(scratchdir).append(relpath).append(BLOCKCACHE_EXT);
+    tmppath.append(cachedir).append(relpath).append(BLOCKCACHE_EXT);
 
-        // Create directory tree if not exist so we are able to create the cache and index files.
-        boost::filesystem::path cachedir = boost::filesystem::path(tmppath).parent_path();
-        if (created_dirs.count(cachedir.string()) == 0)
-        {
-            boost::filesystem::create_directories(cachedir);
-            created_dirs.emplace(cachedir.string());
-        }
+    // Create directory tree if not exist so we are able to create the cache and index files.
+    boost::filesystem::path cachesubdir = boost::filesystem::path(tmppath).parent_path();
+    if (created_cachesubdirs.count(cachesubdir.string()) == 0)
+    {
+        boost::filesystem::create_directories(cachesubdir);
+        created_cachesubdirs.emplace(cachesubdir.string());
+    }
 
-        // Block cache file
-        fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
-        if (fi.cachefd <= 0)
-        {
-            std::cout << "Failed to open " << tmppath << "\n";
-            return -1;
-        }
+    // Create and open the block cache file.
+    fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
+    if (fi.cachefd <= 0)
+    {
+        std::cerr << "Failed to open " << tmppath << "\n";
+        return -1;
+    }
 
-        // Index file
-        tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
-        fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
-        if (fi.indexfd <= 0)
-        {
-            std::cout << "Failed to open " << tmppath << "\n";
-            return -1;
-        }
+    // Create and open the block index file.
+    tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
+    fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
+    if (fi.indexfd <= 0)
+    {
+        std::cerr << "Failed to open " << tmppath << "\n";
+        return -1;
+    }
 
-        // Write first entry (8 bytes) to the index file. First entry is the length of the original file.
-        // This can be used when restoring/rolling back a file.
-        if (write(fi.indexfd, &fi.original_length, 8) == -1)
-        {
-            std::cout << "Error writing to index file " << tmppath << "\n";
-            return -1;
-        }
+    // Write first entry (8 bytes) to the index file. First entry is the length of the original file.
+    // This will be helpful when restoring/rolling back a file.
+    if (write(fi.indexfd, &fi.original_length, 8) == -1)
+    {
+        std::cerr << "Error writing to index file " << tmppath << "\n";
+        return -1;
     }
 
     return 0;
 }
 
+/**
+ * Closes any open caching fds for a given file.
+ */
 void state_monitor::close_cachingfds(state_file_info &fi)
 {
     if (fi.readfd > 0)
@@ -333,37 +388,45 @@ void state_monitor::close_cachingfds(state_file_info &fi)
     fi.indexfd = 0;
 }
 
+/**
+ * Inserts a file into the modified files list of this session.
+ * This index is used to restore modified files during restore.
+ */
 int state_monitor::write_touchedfileentry(std::string_view filepath)
 {
     if (touchedfileindexfd <= 0)
     {
-        std::string indexfile = scratchdir + "/idxtouched.idx";
+        std::string indexfile = cachedir + "/idxtouched.idx";
         touchedfileindexfd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
         if (touchedfileindexfd <= 0)
         {
-            std::cout << "Failed to open " << indexfile << "\n";
+            std::cerr << "Failed to open " << indexfile << "\n";
             return -1;
         }
     }
 
-    // Write the relative file path to the index.
+    // Write the relative file path line to the index.
     filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
     write(touchedfileindexfd, filepath.data(), filepath.length());
     write(touchedfileindexfd, "\n", 1);
     return 0;
 }
 
+/**
+ * Inserts a file into the list of new files created during this session.
+ * This index is used in deleting new files during restore.
+ */
 int state_monitor::write_newfileentry(std::string_view filepath)
 {
-    std::string indexfile = scratchdir + "/idxnew.idx";
+    std::string indexfile = cachedir + "/idxnew.idx";
     int fd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fd <= 0)
     {
-        std::cout << "Failed to open " << indexfile << "\n";
+        std::cerr << "Failed to open " << indexfile << "\n";
         return -1;
     }
 
-    // Write the relative file path to the index.
+    // Write the relative file path line to the index.
     filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
     write(fd, filepath.data(), filepath.length());
     write(fd, "\n", 1);
@@ -371,10 +434,16 @@ int state_monitor::write_newfileentry(std::string_view filepath)
     return 0;
 }
 
+/**
+ * Scans and removes the given filepath from the new files index.
+ */
 void state_monitor::remove_newfileentry(std::string_view filepath)
 {
-    std::string indexfile = scratchdir + "/idxnew.idx";
-    std::string indexfile_tmp = scratchdir + "/idxnew.idx.tmp";
+    // We create a copy of the new file index and transfer lines from first file
+    // to the second file except the line matching the given filepath.
+
+    std::string indexfile = cachedir + "/idxnew.idx";
+    std::string indexfile_tmp = cachedir + "/idxnew.idx.tmp";
 
     std::ifstream infile(indexfile);
     std::ofstream outfile(indexfile_tmp);
@@ -392,8 +461,10 @@ void state_monitor::remove_newfileentry(std::string_view filepath)
     infile.close();
     outfile.close();
 
+    // Remove the old index.
     std::remove(indexfile.c_str());
 
+    // If no lines transferred, delete the temp file as well.
     if (linestransferred)
         std::rename(indexfile_tmp.c_str(), indexfile.c_str());
     else
