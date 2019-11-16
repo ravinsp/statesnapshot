@@ -9,7 +9,10 @@ std::thread fusethread;
 int main(int argc, char *argv[])
 {
     if (argc !=4)
+    {
+        std::cerr << "Not enough arguments.\n";
         exit(1);
+    }
 
     // We need an fd for every dentry in our the filesystem that the
     // kernel knows about. This is way more than most processes need,

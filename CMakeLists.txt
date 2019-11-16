@@ -16,8 +16,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY build)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY build)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY build)
 
-find_package(PkgConfig REQUIRED) 
-pkg_check_modules(FUSE_PKG REQUIRED IMPORTED_TARGET fuse3)
+#find_package(PkgConfig REQUIRED) 
+#pkg_check_modules(FUSE_PKG REQUIRED IMPORTED_TARGET fuse3)
 
 add_executable(statesnap
     src/main.cpp
@@ -25,14 +25,24 @@ add_executable(statesnap
     src/state_monitor.cpp
 )
 target_link_libraries(statesnap
-    PkgConfig::FUSE_PKG
-    sodium
-    boost_system
-    boost_filesystem)
+    libfuse3.so.3
+    libsodium.a
+    libboost_system.a
+    libboost_filesystem.a)
 
 add_executable(restore
     src/restore.cpp
 )
 target_link_libraries(restore
-    boost_system
-    boost_filesystem)
+    libboost_system.a
+    libboost_filesystem.a)
+
+# Create docker image from hpcore build output with 'make docker'
+# Requires docker to be runnable without 'sudo'
+add_custom_target(docker
+  COMMAND docker build -t statefs:latest .
+)
+set_target_properties(docker PROPERTIES EXCLUDE_FROM_ALL TRUE)
+add_dependencies(docker
+    statesnap
+    restore)

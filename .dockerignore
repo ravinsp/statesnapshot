@@ -1,0 +1,4 @@
+**/**
+!build/statesnap
+!build/restore
+!**/libfuse3.so.3
