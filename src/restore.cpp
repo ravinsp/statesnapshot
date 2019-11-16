@@ -6,6 +6,7 @@
 #include <fstream>
 #include <unordered_set>
 #include <vector>
+#include <boost/filesystem.hpp>
 
 namespace staterestore
 {
@@ -15,6 +16,8 @@ const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
 constexpr uint8_t BLOCKINDEX_ENTRY_SIZE = 44;
 constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
+
+std::unordered_set<std::string> created_dirs;
 
 // Look at new files added and delete them if still exist.
 void delete_newfiles(const char *statedir, const char *chkpntdir)
@@ -73,12 +76,20 @@ int restore_blocks(std::string_view file, const std::vector<char> &bindex, const
         }
     }
 
-    // Open original file.
+    // Create or Open original file.
     {
         std::string originalfile(statedir);
         originalfile.append(file);
 
-        orifilefd = open(originalfile.c_str(), O_RDONLY | O_CREAT, 0644);
+        // Create directory tree if not exist so we are able to create the file.
+        boost::filesystem::path filedir = boost::filesystem::path(originalfile).parent_path();
+        if (created_dirs.count(filedir.string()) == 0)
+        {
+            boost::filesystem::create_directories(filedir);
+            created_dirs.emplace(filedir.string());
+        }
+
+        orifilefd = open(originalfile.c_str(), O_WRONLY | O_CREAT, 0644);
         if (orifilefd <= 0)
         {
             std::cout << "Error opening " << originalfile << "\n";
@@ -100,19 +111,14 @@ int restore_blocks(std::string_view file, const std::vector<char> &bindex, const
         memcpy(&bcacheoffset, idxptr + idxoffset, 8);
         idxoffset += 40; // Skip the hash(32)
 
-        std::cout << "oo:" << orifileoffset << " bco:" << bcacheoffset << "\n";
-
-        char buf[32];
-        lseek(bcachefd, bcacheoffset, SEEK_SET);
-        read(bcachefd, buf, 32);
-        std::cout << buf << "\n";
-
         // Transfer the cached block to the target file.
-        //copy_file_range(bcachefd, &bcacheoffset, orifilefd, &orifileoffset, BLOCK_SIZE, 0);
+        copy_file_range(bcachefd, &bcacheoffset, orifilefd, &orifileoffset, BLOCK_SIZE, 0);
     }
 
     // If the target file is bigger than the original size, truncate it to the original size.
-    // ftruncate(orifilefd, originallen);
+    off_t currentlen = lseek(orifilefd, 0, SEEK_END);
+    if (currentlen > originallen)
+        ftruncate(orifilefd, originallen);
 
     close(bcachefd);
     close(orifilefd);

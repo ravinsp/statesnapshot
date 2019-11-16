@@ -29,7 +29,7 @@ void state_monitor::oncreate(int fd)
     std::lock_guard<std::mutex> lock(fmapmutex);
 
     std::string filepath;
-    if (getpath_for_fd(filepath, fd) == 0)
+    if (getmappedpath_for_fd(filepath, fd) == 0)
     {
         state_file_info fi;
         fi.isnew = true;
@@ -79,29 +79,31 @@ void state_monitor::ondelete(const char *filename, int parentfd)
     }
 }
 
-void state_monitor::onopen(int fd)
+void state_monitor::onopen(int inodefd, int flags)
 {
+    std::cout << "onopen\n";
     std::lock_guard<std::mutex> lock(fmapmutex);
 
     std::string filepath;
-    if (getpath_for_fd(filepath, fd) == 0)
+    if (getpath_for_fd(filepath, inodefd) == 0)
     {
         state_file_info *fi;
         if (getfileinfo(&fi, filepath) == 0)
         {
-            // Check whether fd is open in truncate mode.
-            int oflags = fcntl(fd, F_GETFL);
-            fi->istruncate = (oflags & O_TRUNC);
+            // Check whether fd is open in truncate mode. If so cache the file immediately.
+            if (flags & O_TRUNC)
+                cache_blocks(*fi, 0, fi->original_length);
         }
     }
 }
 
 void state_monitor::onwrite(int fd, const off_t offset, const size_t length)
 {
+    std::cout << "onwrite\n";
     std::lock_guard<std::mutex> lock(fmapmutex);
 
     std::string filepath;
-    if (getpath_for_fd(filepath, fd) == 0)
+    if (getmappedpath_for_fd(filepath, fd) == 0)
     {
         state_file_info *fi;
         if (getfileinfo(&fi, filepath) == 0)
@@ -126,6 +128,21 @@ void state_monitor::onclose(int fd)
 
 int state_monitor::getpath_for_fd(std::string &filepath, const int fd)
 {
+    char proclnk[32];
+    sprintf(proclnk, "/proc/self/fd/%d", fd);
+
+    filepath.resize(PATH_MAX);
+    ssize_t len = readlink(proclnk, filepath.data(), PATH_MAX);
+    if (len > 0)
+    {
+        filepath.resize(len);
+        return 0;
+    }
+    return -1;
+}
+
+int state_monitor::getmappedpath_for_fd(std::string &filepath, const int fd)
+{
     // Return path from the map if found.
     const auto itr = fdpathmap.find(fd);
     if (itr != fdpathmap.end())
@@ -134,17 +151,12 @@ int state_monitor::getpath_for_fd(std::string &filepath, const int fd)
         return 0;
     }
 
-    char proclnk[32];
-    char fpath[PATH_MAX];
-
-    sprintf(proclnk, "/proc/self/fd/%d", fd);
-    ssize_t len = readlink(proclnk, fpath, PATH_MAX);
-    if (len > 0)
+    if (getpath_for_fd(filepath, fd) == 0)
     {
-        filepath = std::string(fpath, len);
         fdpathmap[fd] = filepath;
         return 0;
     }
+
     return -1;
 }
 
@@ -185,23 +197,12 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
     if (prepare_caching(fi) != 0)
         return -1;
 
-    uint32_t startblock, endblock;
+    // Return if incoming write is outside any of the original blocks.
+    if (offset > original_blockcount * BLOCK_SIZE)
+        return 0;
 
-    // Check truncate mode.
-    if (fi.istruncate)
-    {
-        startblock = 0;
-        endblock = original_blockcount - 1;
-    }
-    else
-    {
-        // Return if incoming write is outside any of the original blocks.
-        if (offset > original_blockcount * BLOCK_SIZE)
-            return 0;
-
-        startblock = offset / BLOCK_SIZE;
-        endblock = (offset + length) / BLOCK_SIZE;
-    }
+    uint32_t startblock = offset / BLOCK_SIZE;
+    uint32_t endblock = (offset + length) / BLOCK_SIZE;
 
     std::cout << "Cache blocks: '" << fi.filepath << "' [" << offset << "," << length << "] " << startblock << "," << endblock << "\n";
 
@@ -217,13 +218,12 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
 
         // Read the block being replaced and send to cache file.
         char blockbuf[BLOCK_SIZE];
-        lseek(fi.readfd, BLOCK_SIZE * i, SEEK_SET);
-        if (read(fi.readfd, blockbuf, 32) <= 0)
+        if (pread(fi.readfd, blockbuf, BLOCK_SIZE, BLOCK_SIZE * i) <= 0)
         {
             std::cout << "Read failed " << fi.filepath << "\n";
             return -1;
         }
-        
+
         if (write(fi.cachefd, blockbuf, BLOCK_SIZE) < 0)
         {
             std::cout << "Write to block cache failed\n";
@@ -263,15 +263,21 @@ int state_monitor::prepare_caching(state_file_info &fi)
             std::cout << "Failed to open " << fi.filepath << "\n";
             return -1;
         }
-        
+
         std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
 
         std::string tmppath;
         tmppath.reserve(scratchdir.length() + relpath.length() + EXT_LEN);
 
         tmppath.append(scratchdir).append(relpath).append(BLOCKCACHE_EXT);
-        // Create directory tree so we are able to create the cache and index files.
-        boost::filesystem::create_directories(boost::filesystem::path(tmppath).parent_path());
+
+        // Create directory tree if not exist so we are able to create the cache and index files.
+        boost::filesystem::path cachedir = boost::filesystem::path(tmppath).parent_path();
+        if (created_dirs.count(cachedir.string()) == 0)
+        {
+            boost::filesystem::create_directories(cachedir);
+            created_dirs.emplace(cachedir.string());
+        }
 
         // Block cache file
         fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);

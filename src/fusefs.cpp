@@ -874,6 +874,9 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
        with O_PATH (so it doesn't allow read/write access). */
     char buf[64];
     sprintf(buf, "/proc/self/fd/%i", inode.fd);
+
+    statemonitor.onopen(inode.fd, fi->flags);
+
     auto fd = open(buf, fi->flags & ~O_NOFOLLOW);
     if (fd == -1)
     {
@@ -886,8 +889,6 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi)
 
     fi->keep_cache = (fs.timeout != 0);
     fi->fh = fd;
-
-    statemonitor.onopen(fd);
 
     fuse_reply_open(req, fi);
 }
@@ -960,9 +961,7 @@ static void sfs_write_buf(fuse_req_t req, fuse_ino_t ino, fuse_bufvec *in_buf,
     (void)ino;
     auto size{fuse_buf_size(in_buf)};
 
-    // The file cannot be read until this 10 seconds passes.
-    sleep(10);
-    // statemonitor.onwrite(fi->fh, off, size);
+    statemonitor.onwrite(fi->fh, off, size);
 
     do_write_buf(req, size, off, in_buf, fi);
 }

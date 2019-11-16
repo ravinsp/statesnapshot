@@ -24,7 +24,6 @@ add_executable(statesnap
     src/fusefs.cpp
     src/state_monitor.cpp
 )
-
 target_link_libraries(statesnap
     PkgConfig::FUSE_PKG
     sodium
@@ -34,3 +33,6 @@ target_link_libraries(statesnap
 add_executable(restore
     src/restore.cpp
 )
+target_link_libraries(restore
+    boost_system
+    boost_filesystem)
