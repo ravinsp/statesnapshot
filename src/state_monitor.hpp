@@ -47,12 +47,12 @@ private:
 public:
     std::string statedir;
     std::string scratchdir;
-    void oncreate(int fd);
-    void onopen(int inodefd, int flags);
-    void onwrite(int fd, const off_t offset, const size_t length);
-    void ondelete(const char *filename, int parentfd);
-    void ontruncate(int fd);
-    void onclose(int fd);
+    void oncreate(const int fd);
+    void onopen(const int inodefd, const int flags);
+    void onwrite(const int fd, const off_t offset, const size_t length);
+    void ondelete(const char *filename, const int parentfd);
+    void ontruncate(const int fd, const off_t newsize);
+    void onclose(const int fd);
 };
 
 } // namespace fusefs

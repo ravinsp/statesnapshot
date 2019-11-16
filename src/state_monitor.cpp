@@ -24,7 +24,7 @@ constexpr int FILE_PERMS = 0644;
 const char *const BLOCKCACHE_EXT = ".bcache";
 const char *const BLOCKINDEX_EXT = ".bindex";
 
-void state_monitor::oncreate(int fd)
+void state_monitor::oncreate(const int fd)
 {
     std::lock_guard<std::mutex> lock(fmapmutex);
 
@@ -39,7 +39,37 @@ void state_monitor::oncreate(int fd)
     }
 }
 
-void state_monitor::ondelete(const char *filename, int parentfd)
+void state_monitor::onopen(const int inodefd, const int flags)
+{
+    std::lock_guard<std::mutex> lock(fmapmutex);
+
+    std::string filepath;
+    if (getpath_for_fd(filepath, inodefd) == 0)
+    {
+        state_file_info *fi;
+        if (getfileinfo(&fi, filepath) == 0)
+        {
+            // Check whether fd is open in truncate mode. If so cache the file immediately.
+            if (flags & O_TRUNC)
+                cache_blocks(*fi, 0, fi->original_length);
+        }
+    }
+}
+
+void state_monitor::onwrite(const int fd, const off_t offset, const size_t length)
+{
+    std::lock_guard<std::mutex> lock(fmapmutex);
+
+    std::string filepath;
+    if (getmappedpath_for_fd(filepath, fd) == 0)
+    {
+        state_file_info *fi;
+        if (getfileinfo(&fi, filepath) == 0)
+            cache_blocks(*fi, offset, length);
+    }
+}
+
+void state_monitor::ondelete(const char *filename, const int parentfd)
 {
     std::lock_guard<std::mutex> lock(fmapmutex);
 
@@ -79,39 +109,18 @@ void state_monitor::ondelete(const char *filename, int parentfd)
     }
 }
 
-void state_monitor::onopen(int inodefd, int flags)
+void state_monitor::ontruncate(const int fd, const off_t newsize)
 {
-    std::cout << "onopen\n";
-    std::lock_guard<std::mutex> lock(fmapmutex);
-
-    std::string filepath;
-    if (getpath_for_fd(filepath, inodefd) == 0)
-    {
-        state_file_info *fi;
-        if (getfileinfo(&fi, filepath) == 0)
-        {
-            // Check whether fd is open in truncate mode. If so cache the file immediately.
-            if (flags & O_TRUNC)
-                cache_blocks(*fi, 0, fi->original_length);
-        }
-    }
-}
-
-void state_monitor::onwrite(int fd, const off_t offset, const size_t length)
-{
-    std::cout << "onwrite\n";
-    std::lock_guard<std::mutex> lock(fmapmutex);
-
     std::string filepath;
     if (getmappedpath_for_fd(filepath, fd) == 0)
     {
         state_file_info *fi;
-        if (getfileinfo(&fi, filepath) == 0)
-            cache_blocks(*fi, offset, length);
+        if (getfileinfo(&fi, filepath) == 0 && newsize < fi->original_length)
+            cache_blocks(*fi, 0, fi->original_length);
     }
 }
 
-void state_monitor::onclose(int fd)
+void state_monitor::onclose(const int fd)
 {
     std::lock_guard<std::mutex> lock(fmapmutex);
 

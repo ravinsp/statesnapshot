@@ -296,6 +296,10 @@ out_err:
 static void sfs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
                         int valid, fuse_file_info *fi)
 {
+    // We use some conditions to detect truncate call.
+    if (fi != NULL && fi->fh > 0 && attr->st_size > 0)
+        statemonitor.ontruncate(fi->fh, attr->st_size);
+
     (void)ino;
     do_setattr(req, ino, attr, valid, fi);
 }
