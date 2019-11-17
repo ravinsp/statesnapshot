@@ -42,11 +42,11 @@ int read_blockindex(std::vector<char> &buffer, std::string_view file, const char
     std::string bindexfile(chkpntdir);
     bindexfile.append(file).append(BLOCKINDEX_EXT);
     std::ifstream infile(bindexfile, std::ios::binary | std::ios::ate);
-    std::streamsize size = infile.tellg();
+    std::streamsize idxsize = infile.tellg();
     infile.seekg(0, std::ios::beg);
 
-    buffer.resize(size);
-    if (!infile.read(buffer.data(), size))
+    buffer.resize(idxsize);
+    if (!infile.read(buffer.data(), idxsize))
     {
         std::cout << "Failed to read " << bindexfile << "\n";
         return -1;

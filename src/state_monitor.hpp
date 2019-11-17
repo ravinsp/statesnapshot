@@ -1,5 +1,5 @@
-#ifndef _FS_HANDLER_
-#define _FS_HANDLER_
+#ifndef _STATE_MONITOR_
+#define _STATE_MONITOR_
 
 #include <cstdint>
 #include <sys/types.h>
