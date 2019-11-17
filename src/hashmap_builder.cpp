@@ -5,7 +5,6 @@
 #include <fcntl.h>
 #include <cmath>
 #include <boost/filesystem.hpp>
-#include <boost/system/error_code.hpp>
 #include "hashmap_builder.hpp"
 #include "hasher.hpp"
 
@@ -33,16 +32,9 @@ int hashmap_builder::generate(std::list<std::string> filepathhints)
     {
         boost::filesystem::recursive_directory_iterator itr(statedir);
         boost::filesystem::recursive_directory_iterator itrend;
-        for (boost::system::error_code ec; itr != itrend;)
+        for (boost::system::error_code ec; itr != itrend; itr++)
         {
-            itr.increment(ec);
             const boost::filesystem::path path = itr->path();
-            if (ec)
-            {
-                std::cerr << "Error While Accessing : " << path.string() << " :: " << ec.message() << '\n';
-                return -1;
-            }
-
             if (boost::filesystem::is_regular_file(path))
                 generate_hashmap_forfile(path.string());
         }
@@ -67,21 +59,22 @@ int hashmap_builder::generate_hashmap_forfile(std::string_view filepath)
     // If not, we simply read the original file and recalculate all the block hashes.
 
     std::string_view relpath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
-    std::string hmapfile;
-    hmapfile.reserve(hashmapdir.length() + relpath.length() + EXT_LEN);
-    hmapfile.append(hashmapdir).append(relpath).append(HASHMAP_EXT);
+
+    uint32_t blockcount = 0;
+    int orifd = 0, hmapfd = 0;
+    bool oldhmap_exists;
+
+    if (open_blockhashmap(hmapfd, oldhmap_exists, relpath) != 0)
+        return -1;
 
     // Attempt to read the block index file.
-    off_t orifilelength = 0;
     std::map<uint32_t, hasher::B2H> bindex;
-    get_blockindex(bindex, orifilelength, relpath);
+    if (get_blockindex(bindex, blockcount, relpath) != 0)
+        return -1;
 
-    const bool bindex_exists = !bindex.empty();
-
-    int orifd = 0;
-
-    // If block index does not exist, we'll need to read raw data blocks from the original file.
-    if (!bindex_exists)
+    // No need to read original file if the block index has all the blocks information.
+    // If block index is not sufficient, we'll need to read raw data blocks from the original file.
+    if (bindex.empty() || bindex.size() < blockcount)
     {
         orifd = open(filepath.data(), O_RDONLY);
         if (orifd == -1)
@@ -90,43 +83,103 @@ int hashmap_builder::generate_hashmap_forfile(std::string_view filepath)
             return -1;
         }
 
-        // Detect the original file length if not already loaded by bindex file.
-        if (orifilelength == 0)
-            orifilelength = lseek(orifd, 0, SEEK_END);
+        // Detect the block count if not already loaded by block index file.
+        if (blockcount == 0)
+        {
+            off_t orifilelength = lseek(orifd, 0, SEEK_END);
+            blockcount = ceil((double)orifilelength / (double)BLOCK_SIZE);
+        }
     }
 
-    uint32_t blockcount = ceil((double)orifilelength / (double)BLOCK_SIZE);
-    std::map<uint32_t, hasher::B2H> hashes;
+    // Build up the latest block hash list in memory.
+    // Hashes maybe fetched from block index or existing hash map (if available) or
+    // recalculated from original file.
+    hasher::B2H hashes[1 + blockcount]; // +1 is for the root hash.
+    size_t newhmap_filesize = (1 + blockcount) * HASH_SIZE;
+
+    get_updatedhashes(hashes, relpath, oldhmap_exists, hmapfd, orifd, blockcount, bindex, newhmap_filesize);
+
+    // Calculate the root hash (we use XOR for this).
+    hasher::B2H roothash;
+    for (hasher::B2H hash : hashes)
+    {
+        roothash.data[0] ^= hash.data[0];
+        roothash.data[1] ^= hash.data[1];
+        roothash.data[2] ^= hash.data[2];
+        roothash.data[3] ^= hash.data[3];
+    }
+    hashes[0] = roothash;
+
+    // Write the updated hash list into the block hash map file.
+    pwrite(hmapfd, &hashes, newhmap_filesize, 0);
+    ftruncate(hmapfd, newhmap_filesize);
+
+    return 0;
+}
+
+int hashmap_builder::get_updatedhashes(
+    hasher::B2H *hashes, std::string_view relpath, const bool oldhmap_exists, const int hmapfd, const int orifd,
+    const uint32_t blockcount, const std::map<uint32_t, hasher::B2H> bindex, const off_t newhmap_filesize)
+{
+    // Load up old hashes from the hashmap file if the block index exists.
+    // This will allow us to only update the new hashes using the block index.
+    if (!bindex.empty() && oldhmap_exists && pread(hmapfd, &hashes, newhmap_filesize, 0) == -1)
+    {
+        std::cerr << "Read failed on block hash map for " << relpath << '\n';
+        return -1;
+    }
 
     for (uint32_t blockid = 0; blockid < blockcount; blockid++)
     {
-        if (bindex_exists)
+        // We already have a hash loaded from hash map file (if it exists).
+        bool hashfound = oldhmap_exists;
+
+        // Retrieve uptodate hash from the block index if any.
+        const auto itr = bindex.find(blockid);
+        if (itr != bindex.end())
         {
-            const auto itr = bindex.find(blockid);
-            if (itr != bindex.end())
-            {
-                hashes[blockid] = itr->second;
-            }
+            hashes[blockid + 1] = itr->second;
+            hashfound = true;
         }
-        else
+
+        // If all above attempts fail, compute the hash using raw data block.
+        if (!hashfound)
         {
-            // If bindex does not exist, calculate the hash using raw data block.
             char block[BLOCK_SIZE];
             off_t blockoffset = BLOCK_SIZE * blockid;
-            if (pread(orifd, block, BLOCK_SIZE, blockoffset) != 0)
+            if (pread(orifd, block, BLOCK_SIZE, blockoffset) == -1)
             {
-                std::cerr << "Read failed " << filepath << '\n';
+                std::cerr << "Read failed " << relpath << '\n';
                 return -1;
             }
 
-            hashes[blockid] = hasher::hash(&blockoffset, 8, block, BLOCK_SIZE);
+            hashes[blockid + 1] = hasher::hash(&blockoffset, 8, block, BLOCK_SIZE);
         }
     }
 
-    // Calculate root hash.
-    
+    return 0;
+}
 
-    int hmapfd = open(hmapfile.data(), O_RDONLY | O_CREAT | O_TRUNC, 0644);
+int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldhmap_exists, std::string_view relpath)
+{
+    std::string hmapfile;
+    hmapfile.reserve(hashmapdir.length() + relpath.length() + EXT_LEN);
+    hmapfile.append(hashmapdir).append(relpath).append(HASHMAP_EXT);
+
+    oldhmap_exists = boost::filesystem::exists(hmapfile);
+
+    if (!oldhmap_exists)
+    {
+        // Create directory tree if not exist so we are able to create the hashmap files.
+        boost::filesystem::path hmapsubdir = boost::filesystem::path(hmapfile).parent_path();
+        if (created_hmapsubdirs.count(hmapsubdir.string()) == 0)
+        {
+            boost::filesystem::create_directories(hmapsubdir);
+            created_hmapsubdirs.emplace(hmapsubdir.string());
+        }
+    }
+
+    hmapfd = open(hmapfile.data(), O_RDWR | O_CREAT, 0644);
     if (hmapfd == -1)
     {
         std::cerr << "Open failed " << hmapfile << '\n';
@@ -136,13 +189,13 @@ int hashmap_builder::generate_hashmap_forfile(std::string_view filepath)
     return 0;
 }
 
-int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, off_t &orifilelength, std::string_view filerelpath)
+int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, std::string_view filerelpath)
 {
     std::string bindexfile;
     bindexfile.reserve(cachedir.length() + filerelpath.length() + EXT_LEN);
     bindexfile.append(cachedir).append(filerelpath).append(BLOCKINDEX_EXT);
 
-    if (!boost::filesystem::exists(bindexfile))
+    if (boost::filesystem::exists(bindexfile))
     {
         std::ifstream infile(bindexfile, std::ios::binary | std::ios::ate);
         std::streamsize idxsize = infile.tellg();
@@ -152,8 +205,10 @@ int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, off
         std::vector<char> bindex(idxsize);
         if (infile.read(bindex.data(), idxsize))
         {
-            //  First 8 bytes contain the original file length.
+            // First 8 bytes contain the original file length.
+            off_t orifilelength = 0;
             memcpy(&orifilelength, bindex.data(), 8);
+            blockcount = ceil((double)orifilelength / (double)BLOCK_SIZE);
 
             // Skip the first 8 bytes and loop through index entries.
             for (uint32_t idxoffset = 8; idxoffset < bindex.size();)
@@ -173,6 +228,7 @@ int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, off
         else
         {
             std::cerr << "Read failed " << bindexfile << '\n';
+            return -1;
         }
 
         infile.close();
@@ -181,11 +237,18 @@ int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, off
     return 0;
 }
 
-int hashmap_builder::insert_blockhash(const int hmapfd, const int blockid, void *hashbuf)
-{
-    if (pwrite(hmapfd, hashbuf, HASH_SIZE, blockid * BLOCK_SIZE) == -1)
-        return -1;
-    return 0;
-}
-
 } // namespace statehashmap
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4)
+        exit(1);
+
+    statehashmap::hashmap_builder builder(
+        realpath(argv[1], NULL),
+        realpath(argv[2], NULL),
+        realpath(argv[3], NULL));
+    builder.generate(std::list<std::string>());
+
+    std::cout << "Done.\n";
+}

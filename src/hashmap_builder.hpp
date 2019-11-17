@@ -5,19 +5,31 @@
 #include <list>
 #include <map>
 #include <vector>
+#include <unordered_set>
 #include "hasher.hpp"
+
+namespace statehashmap
+{
 
 class hashmap_builder
 {
 private:
     std::string statedir, cachedir, hashmapdir;
+    int open_blockhashmap(int &hmapfd, bool &oldhmap_exists, std::string_view relpath);
+    int generate_hashmap_forfile(std::string_view filepath);
+    int get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, std::string_view filerelpath);
+    int get_updatedhashes(
+        hasher::B2H *hashes, std::string_view relpath, const bool oldhmap_exists, const int hmapfd, const int orifd,
+        const uint32_t blockcount, const std::map<uint32_t, hasher::B2H> bindex, const off_t newhashmap_filesize);
+
+    // List of new cache sub directories created during the session.
+    std::unordered_set<std::string> created_hmapsubdirs;
 
 public:
     hashmap_builder(std::string statedir, std::string cachedir, std::string hashmapdir);
     int generate(std::list<std::string> filepathhints);
-    int generate_hashmap_forfile(std::string_view filepath);
-    int get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, off_t &orifilelength, std::string_view filerelpath);
-    int insert_blockhash(const int hmapfd, const int blockid, void *hashbuf);
 };
+
+} // namespace statehashmap
 
 #endif

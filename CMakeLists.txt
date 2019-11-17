@@ -37,6 +37,14 @@ target_link_libraries(restore
     libboost_system.a
     libboost_filesystem.a)
 
+add_executable(hashmap
+    src/hashmap_builder.cpp
+)
+target_link_libraries(hashmap
+    libboost_system.a
+    libsodium.a
+    libboost_filesystem.a)
+
 # Create docker image from hpcore build output with 'make docker'
 # Requires docker to be runnable without 'sudo'
 add_custom_target(docker
