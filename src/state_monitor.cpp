@@ -351,7 +351,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     }
 
     // Create and open the block index file.
-    tmppath.replace(tmppath.length() - EXT_LEN + 1, EXT_LEN - 1, BLOCKINDEX_EXT);
+    tmppath.replace(tmppath.length() - EXT_LEN, EXT_LEN, BLOCKINDEX_EXT);
     fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fi.indexfd <= 0)
     {
