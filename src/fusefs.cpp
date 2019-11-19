@@ -64,6 +64,28 @@ struct hash<SrcId>
 };
 } // namespace std
 
+namespace helpers
+{
+
+int getfilepath(std::string &filepath, int parentfd, const char *filename)
+{
+    // Get parent directory path using the parentfd.
+    char proclnk[32];
+    char parentpath[PATH_MAX];
+    sprintf(proclnk, "/proc/self/fd/%d", parentfd);
+    ssize_t parentlen = readlink(proclnk, parentpath, PATH_MAX);
+    if (parentlen > 0)
+    {
+        // Concat parent dir path and filename to get the full path.
+        filepath.reserve(parentlen + strlen(filename) + 1);
+        filepath.append(parentpath, parentlen).append("/").append(filename);
+        return 0;
+    }
+    return -1;
+}
+
+} // namespace helpers
+
 namespace fusefs
 {
 
@@ -530,6 +552,13 @@ static void sfs_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
         return;
     }
 
+    std::string oldfilepath, newfilepath;
+    if (helpers::getfilepath(oldfilepath, inode_p.fd, name) == 0 &&
+        helpers::getfilepath(newfilepath, inode_np.fd, newname) == 0)
+    {
+        statemonitor.onrename(oldfilepath, newfilepath);
+    }
+
     auto res = renameat(inode_p.fd, name, inode_np.fd, newname);
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
@@ -538,7 +567,9 @@ static void sfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     Inode &inode_p = get_inode(parent);
 
-    statemonitor.ondelete(name, inode_p.fd);
+    std::string filepath;
+    if (helpers::getfilepath(filepath, inode_p.fd, name) == 0)
+        statemonitor.ondelete(filepath);
 
     auto res = unlinkat(inode_p.fd, name, 0);
     fuse_reply_err(req, res == -1 ? errno : 0);

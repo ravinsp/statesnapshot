@@ -35,18 +35,8 @@ void state_monitor::oncreate(const int fd)
     std::lock_guard<std::mutex> lock(monitor_mutex);
 
     std::string filepath;
-    if (get_fd_filepath(filepath, fd) == 0)
-    {
-        // Add an entry for the new file in the file info map. This information will be used to ignore
-        // future operations (eg. write/delete) done to this file.
-        state_file_info fi;
-        fi.isnew = true;
-        fi.filepath = filepath;
-        fileinfomap[filepath] = std::move(fi);
-
-        // Add to the list of new files added during this session.
-        write_newfileentry(filepath);
-    }
+    if (extract_filepath(filepath, fd) == 0)
+        oncreate_filepath(filepath);
 }
 
 void state_monitor::onopen(const int inodefd, const int flags)
@@ -79,39 +69,18 @@ void state_monitor::onwrite(const int fd, const off_t offset, const size_t lengt
     }
 }
 
-void state_monitor::ondelete(const char *filename, const int parentfd)
+void state_monitor::onrename(const std::string &oldfilepath, const std::string &newfilepath)
 {
     std::lock_guard<std::mutex> lock(monitor_mutex);
 
-    // Get parent directory path using the parentfd.
-    char proclnk[32];
-    char parentpath[PATH_MAX];
-    sprintf(proclnk, "/proc/self/fd/%d", parentfd);
-    ssize_t parentlen = readlink(proclnk, parentpath, PATH_MAX);
-    if (parentlen > 0)
-    {
-        // Concat parent dir path and filename to get the full path.
-        std::string filepath;
-        filepath.reserve(parentlen + strlen(filename) + 1);
-        filepath.append(parentpath, parentlen).append("/").append(filename);
+    ondelete_filepath(oldfilepath);
+    oncreate_filepath(newfilepath);
+}
 
-        state_file_info *fi;
-        if (get_tracked_fileinfo(&fi, filepath) == 0)
-        {
-            if (fi->isnew)
-            {
-                // If this is a new file, just remove from existing index entries.
-                // No need to cache the file blocks.
-                remove_newfileentry(fi->filepath);
-                fileinfomap.erase(filepath);
-            }
-            else
-            {
-                // If not a new file, cache the entire file.
-                cache_blocks(*fi, 0, fi->original_length);
-            }
-        }
-    }
+void state_monitor::ondelete(const std::string &filepath)
+{
+    std::lock_guard<std::mutex> lock(monitor_mutex);
+    ondelete_filepath(filepath);
 }
 
 void state_monitor::ontruncate(const int fd, const off_t newsize)
@@ -189,6 +158,44 @@ int state_monitor::get_fd_filepath(std::string &filepath, const int fd)
     }
 
     return -1;
+}
+
+void state_monitor::oncreate_filepath(const std::string &filepath)
+{
+    // Check whether we are already tracking this file path.
+    // Only way this could happen is deleting an existing file and creating a new file with same name.
+    if (fileinfomap.count(filepath) == 0)
+    {
+        // Add an entry for the new file in the file info map. This information will be used to ignore
+        // future operations (eg. write/delete) done to this file.
+        state_file_info fi;
+        fi.isnew = true;
+        fi.filepath = filepath;
+        fileinfomap[filepath] = std::move(fi);
+
+        // Add to the list of new files added during this session.
+        write_newfileentry(filepath);
+    }
+}
+
+void state_monitor::ondelete_filepath(const std::string &filepath)
+{
+    state_file_info *fi;
+    if (get_tracked_fileinfo(&fi, filepath) == 0)
+    {
+        if (fi->isnew)
+        {
+            // If this is a new file, just remove from existing index entries.
+            // No need to cache the file blocks.
+            remove_newfileentry(fi->filepath);
+            fileinfomap.erase(filepath);
+        }
+        else
+        {
+            // If not a new file, cache the entire file.
+            cache_blocks(*fi, 0, fi->original_length);
+        }
+    }
 }
 
 /**

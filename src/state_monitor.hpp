@@ -48,9 +48,11 @@ private:
 
     int extract_filepath(std::string &filepath, const int fd);
     int get_fd_filepath(std::string &filepath, const int fd);
+    void oncreate_filepath(const std::string &filepath);
+    void ondelete_filepath(const std::string &filepath);
     int get_tracked_fileinfo(state_file_info **fileinfo, const std::string &filepath);
-    int cache_blocks(state_file_info &fi, const off_t offset, const size_t length);
 
+    int cache_blocks(state_file_info &fi, const off_t offset, const size_t length);
     int prepare_caching(state_file_info &fi);
     void close_cachingfds(state_file_info &fi);
     int write_touchedfileentry(std::string_view filepath);
@@ -63,7 +65,8 @@ public:
     void oncreate(const int fd);
     void onopen(const int inodefd, const int flags);
     void onwrite(const int fd, const off_t offset, const size_t length);
-    void ondelete(const char *filename, const int parentfd);
+    void onrename(const std::string &oldfilepath, const std::string &newfilepath);
+    void ondelete(const std::string &filepath);
     void ontruncate(const int fd, const off_t newsize);
     void onclose(const int fd);
 };
