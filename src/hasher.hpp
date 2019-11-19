@@ -21,6 +21,11 @@ bool operator==(const B2H &lhs, const B2H &rhs)
     return lhs.data[0] == rhs.data[0] && lhs.data[1] == rhs.data[1] && lhs.data[2] == rhs.data[2] && lhs.data[3] == rhs.data[3];
 }
 
+bool operator!=(const B2H &lhs, const B2H &rhs)
+{
+    return lhs.data[0] != rhs.data[0] || lhs.data[1] != rhs.data[1] || lhs.data[2] != rhs.data[2] || lhs.data[3] != rhs.data[3];
+}
+
 void operator^=(B2H &lhs, const B2H &rhs)
 {
     lhs.data[0] ^= rhs.data[0];
