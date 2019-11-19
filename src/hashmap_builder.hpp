@@ -1,5 +1,5 @@
-#ifndef _HASHMAP_BUILDER_
-#define _HASHMAP_BUILDER_
+#ifndef _STATEFS_HASHMAP_BUILDER_
+#define _STATEFS_HASHMAP_BUILDER_
 
 #include <string>
 #include <list>
@@ -8,36 +8,28 @@
 #include <unordered_set>
 #include "hasher.hpp"
 
-namespace statehashmap
+namespace statefs
 {
 
 class hashmap_builder
 {
 private:
-    std::string statedir, changesetdir, blockhashmapdir, hashtreedir;
-    int generate_filehashmaps();
-    void populate_paths_toset(std::unordered_set<std::string> &lines, const std::string &filepath);
-    int generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath);
+    const std::string statedir, changesetdir, blockhashmapdir, hashtreedir;
+    // List of new block hash map sub directories created during the session.
+    std::unordered_set<std::string> created_bhmapsubdirs;
+
     int open_blockhashmap(int &hmapfd, bool &oldhmap_exists, std::string &hmapfile, const std::string &relpath);
     int get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, const std::string &filerelpath);
     int get_updatedhashes(
         hasher::B2H *hashes, const std::string &relpath, const bool oldhmap_exists, const int hmapfd, const int orifd,
         const uint32_t blockcount, const std::map<uint32_t, hasher::B2H> bindex, const off_t newhashmap_filesize);
-
-    int update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &relpath);
-    int update_hashtree_forfile(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath);
-
-    // List of new block hash map sub directories created during the session.
-    std::unordered_set<std::string> created_bhmapsubdirs;
-
-    // List of new root hash map sub directories created during the session.
-    std::unordered_set<std::string> created_htreesubdirs;
+    int update_hashtree_entry(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath);
 
 public:
     hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir);
-    int generate();
+    int generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath);
 };
 
-} // namespace statehashmap
+} // namespace statefs
 
 #endif

@@ -7,20 +7,19 @@
 #include <unordered_set>
 #include <vector>
 #include <boost/filesystem.hpp>
+#include "state_restore.hpp"
+#include "state_common.hpp"
 
-namespace staterestore
+namespace statefs
 {
-const char *const IDX_NEWFILES = "/idxnew.idx";
-const char *const IDX_TOUCHEDFILES = "/idxtouched.idx";
-const char *const BLOCKCACHE_EXT = ".bcache";
-const char *const BLOCKINDEX_EXT = ".bindex";
-constexpr uint8_t BLOCKINDEX_ENTRY_SIZE = 44;
-constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
 
-std::unordered_set<std::string> created_dirs;
+state_restore::state_restore(std::string statedir, std::string changesetdir) : statedir(statedir),
+                                                                               changesetdir(changesetdir)
+{
+}
 
 // Look at new files added and delete them if still exist.
-void delete_newfiles(const char *statedir, const char *changesetdir)
+void state_restore::delete_newfiles()
 {
     std::string indexfile(changesetdir);
     indexfile.append(IDX_NEWFILES);
@@ -37,7 +36,37 @@ void delete_newfiles(const char *statedir, const char *changesetdir)
     infile.close();
 }
 
-int read_blockindex(std::vector<char> &buffer, std::string_view file, const char *statedir, const char *changesetdir)
+// Look at touched files and restore them.
+int state_restore::restore_touchedfiles()
+{
+    std::unordered_set<std::string> processed;
+
+    std::string indexfile(changesetdir);
+    indexfile.append(IDX_TOUCHEDFILES);
+
+    std::ifstream infile(indexfile);
+    for (std::string file; std::getline(infile, file);)
+    {
+        // Skip if already processed.
+        if (processed.count(file) > 0)
+            continue;
+
+        std::vector<char> bindex;
+        if (read_blockindex(bindex, file) != 0)
+            return -1;
+
+        if (restore_blocks(file, bindex) != 0)
+            return -1;
+
+        // Add to processed file list.
+        processed.emplace(file);
+    }
+
+    infile.close();
+    return 0;
+}
+
+int state_restore::read_blockindex(std::vector<char> &buffer, std::string_view file)
 {
     std::string bindexfile(changesetdir);
     bindexfile.append(file).append(BLOCKINDEX_EXT);
@@ -55,7 +84,7 @@ int read_blockindex(std::vector<char> &buffer, std::string_view file, const char
     return 0;
 }
 
-int restore_blocks(std::string_view file, const std::vector<char> &bindex, const char *statedir, const char *changesetdir)
+int state_restore::restore_blocks(std::string_view file, const std::vector<char> &bindex)
 {
     int bcachefd = 0, orifilefd = 0;
     const char *idxptr = bindex.data();
@@ -89,7 +118,7 @@ int restore_blocks(std::string_view file, const std::vector<char> &bindex, const
             created_dirs.emplace(filedir.string());
         }
 
-        orifilefd = open(originalfile.c_str(), O_WRONLY | O_CREAT, 0644);
+        orifilefd = open(originalfile.c_str(), O_WRONLY | O_CREAT, FILE_PERMS);
         if (orifilefd <= 0)
         {
             std::cout << "Error opening " << originalfile << "\n";
@@ -126,49 +155,34 @@ int restore_blocks(std::string_view file, const std::vector<char> &bindex, const
     return 0;
 }
 
-int restore(const char *statedir, const char *changesetdir)
+int state_restore::restore()
 {
-    delete_newfiles(statedir, changesetdir);
+    delete_newfiles();
+    if (restore_touchedfiles() == -1)
+        return -1;
 
-    // Look at touched files and restore them.
-    {
-        std::unordered_set<std::string> processed;
+    // If everything successful, delete the changeset dir.
+    boost::filesystem::remove_all(changesetdir);
 
-        std::string indexfile(changesetdir);
-        indexfile.append(IDX_TOUCHEDFILES);
-
-        std::ifstream infile(indexfile);
-        for (std::string file; std::getline(infile, file);)
-        {
-            // Skip if already processed.
-            if (processed.count(file) > 0)
-                continue;
-
-            std::vector<char> bindex;
-            if (read_blockindex(bindex, file, statedir, changesetdir) != 0)
-                return -1;
-
-            if (restore_blocks(file, bindex, statedir, changesetdir) != 0)
-                return -1;
-
-            // Add to processed file list.
-            processed.emplace(file);
-        }
-
-        infile.close();
-    }
+    return 0;
 }
 
-} // namespace staterestore
+} // namespace statefs
 
 int main(int argc, char *argv[])
 {
     if (argc != 3)
+    {
+        std::cerr << "Incorrect arguments.\n";
         exit(1);
+    }
 
-    staterestore::restore(
-        realpath(argv[1], NULL),
-        realpath(argv[2], NULL));
+    const char *statedir = realpath(argv[1], NULL);
+    const char *changesetdir = realpath(argv[2], NULL);
+    statefs::state_restore staterestore(statedir, changesetdir);
 
-    std::cout << "Done.\n";
+    if (staterestore.restore() == -1)
+        std::cerr << "Restore failed.\n";
+    else
+        std::cout << "Done.\n";
 }

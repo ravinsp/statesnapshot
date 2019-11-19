@@ -19,25 +19,27 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY build)
 #find_package(PkgConfig REQUIRED) 
 #pkg_check_modules(FUSE_PKG REQUIRED IMPORTED_TARGET fuse3)
 
-add_executable(statesnap
-    src/main.cpp
-    src/fusefs.cpp
-    src/state_monitor.cpp
+add_executable(statemon
+    src/state_monitor/fusefs.cpp
+    src/state_monitor/state_monitor.cpp
+    src/hasher.cpp
 )
-target_link_libraries(statesnap
+target_link_libraries(statemon
     libfuse3.so.3
     libsodium.a
     libboost_system.a
     libboost_filesystem.a)
 
 add_executable(restore
-    src/restore.cpp
+    src/state_restore.cpp
 )
 target_link_libraries(restore
     libboost_system.a
     libboost_filesystem.a)
 
 add_executable(hashmap
+    src/hasher.cpp
+    src/hashtree_builder.cpp
     src/hashmap_builder.cpp
 )
 target_link_libraries(hashmap
@@ -52,5 +54,5 @@ add_custom_target(docker
 )
 set_target_properties(docker PROPERTIES EXCLUDE_FROM_ALL TRUE)
 add_dependencies(docker
-    statesnap
+    statemon
     restore)

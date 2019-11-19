@@ -5,128 +5,19 @@
 #include <fcntl.h>
 #include <cmath>
 #include <boost/filesystem.hpp>
+#include "state_common.hpp"
 #include "hashmap_builder.hpp"
 #include "hasher.hpp"
 
-namespace statehashmap
+namespace statefs
 {
 
-constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
-constexpr size_t HASH_SIZE = 32;
-constexpr size_t MAX_HASHES = BLOCK_SIZE / HASH_SIZE;
-constexpr size_t EXT_LEN = 7;
-const char *const HASHMAP_EXT = ".bhmap";
-const char *const BLOCKINDEX_EXT = ".bindex";
-const char *const IDX_NEWFILES = "/idxnew.idx";
-const char *const IDX_TOUCHEDFILES = "/idxtouched.idx";
-const char *const DIRHASH_FNAME = "dir.hash";
-
-hashmap_builder::hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir)
+hashmap_builder::hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir) : 
+    statedir(statedir),
+    changesetdir(changesetdir),
+    blockhashmapdir(blockhashmapdir),
+    hashtreedir(hashtreedir)
 {
-    this->statedir = std::move(statedir);
-    this->changesetdir = std::move(changesetdir);
-    this->blockhashmapdir = std::move(blockhashmapdir);
-    this->hashtreedir = std::move(hashtreedir);
-}
-
-int hashmap_builder::generate()
-{
-    // Load modified file path hints if available.
-    //std::unordered_set<std::string> filepathhints;
-    //populate_paths_toset(filepathhints, std::string(changesetdir).append(IDX_TOUCHEDFILES));
-    //populate_paths_toset(filepathhints, std::string(changesetdir).append(IDX_NEWFILES));
-
-    hasher::B2H dummyhash{0, 0, 0, 0};
-    update_hashtree_fordir(dummyhash, statedir);
-    //generate_filehashmaps();
-}
-
-int hashmap_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &dirpath)
-{
-    const std::string &relpath = dirpath.substr(statedir.length(), dirpath.length() - statedir.length());
-    const std::string dirhashfile = hashtreedir + relpath + "/" + DIRHASH_FNAME;
-
-    // Load current dir hash if exist.
-    hasher::B2H dirhash{0, 0, 0, 0};
-    int dirhashfd = open(dirhashfile.c_str(), O_RDONLY);
-    if (dirhashfd > 0)
-    {
-        read(dirhashfd, &dirhash, HASH_SIZE);
-        close(dirhashfd);
-    }
-
-    hasher::B2H original_dirhash = dirhash;
-
-    const boost::filesystem::directory_iterator itrend;
-    for (boost::filesystem::directory_iterator itr(dirpath); itr != itrend; itr++)
-    {
-        const bool isdir = boost::filesystem::is_directory(itr->path());
-        if ((isdir && update_hashtree_fordir(dirhash, itr->path().string()) == -1) ||
-            generate_hashmap_forfile(dirhash, itr->path().string()) == -1)
-            return -1;
-    }
-
-    if (dirhash != original_dirhash)
-    {
-        // If dir hash has changed, write it back to dir hash file.
-        dirhashfd = open(dirhashfile.c_str(), O_RDWR | O_TRUNC | O_CREAT, 0644);
-        if (dirhashfd == -1)
-            return -1;
-        if (write(dirhashfd, &dirhash, HASH_SIZE) == -1)
-        {
-            close(dirhashfd);
-            return -1;
-        }
-        close(dirhashfd);
-
-        // Also update the parent dir hash by subtracting the old hash and adding the new hash.
-        parentdirhash ^= original_dirhash;
-        parentdirhash ^= dirhash;
-    }
-
-    return 0;
-}
-
-int hashmap_builder::generate_filehashmaps()
-{
-    // Load modified file path hints if available.
-    std::unordered_set<std::string> filepathhints;
-    populate_paths_toset(filepathhints, std::string(changesetdir).append(IDX_TOUCHEDFILES));
-    populate_paths_toset(filepathhints, std::string(changesetdir).append(IDX_NEWFILES));
-
-    // If filepath hints are not provided, simply generate block hash map for the
-    // entire statedir recursively.
-    if (filepathhints.empty())
-    {
-        const boost::filesystem::recursive_directory_iterator itrend;
-        for (boost::filesystem::recursive_directory_iterator itr(statedir); itr != itrend; itr++)
-        {
-            const boost::filesystem::path path = itr->path();
-            //if (boost::filesystem::is_regular_file(path))
-            //    generate_hashmap_forfile(path.string());
-        }
-    }
-    else
-    {
-        //for (const std::string &filepath : filepathhints)
-        //generate_hashmap_forfile(filepath);
-    }
-
-    return 0;
-}
-
-void hashmap_builder::populate_paths_toset(std::unordered_set<std::string> &lines, const std::string &filepath)
-{
-    std::ifstream infile(filepath, std::ios::binary);
-    if (!infile.fail())
-    {
-        for (std::string relpath; std::getline(infile, relpath);)
-        {
-            std::string path = statedir;
-            lines.emplace(path.append(relpath));
-        }
-        infile.close();
-    }
 }
 
 int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath)
@@ -177,7 +68,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
     // Hashes maybe fetched from block index or existing block hash map (if available) or
     // recalculated from original file.
     hasher::B2H hashes[1 + blockcount]; // slot 0 is for the root hash.
-    const size_t newhmap_filesize = (1 + blockcount) * HASH_SIZE;
+    const size_t newhmap_filesize = (1 + blockcount) * hasher::HASH_SIZE;
     if (get_updatedhashes(
             hashes, relpath, oldbhmap_exists, hmapfd, orifd,
             blockcount, bindex, newhmap_filesize) == -1)
@@ -190,7 +81,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
 
     // Rehash the file hash with filename included.
     const std::string filename = boost::filesystem::path(relpath.data()).filename().string();
-    filehash = hasher::hash(filename.c_str(), filename.length(), &filehash, HASH_SIZE);
+    filehash = hasher::hash(filename.c_str(), filename.length(), &filehash, hasher::HASH_SIZE);
 
     // Get the old file hash before we assign the new root hash.
     hasher::B2H oldfilehash = hashes[0];
@@ -202,7 +93,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
     if (ftruncate(hmapfd, newhmap_filesize) == -1)
         return -1;
 
-    if (update_hashtree_forfile(parentdirhash, oldbhmap_exists, oldfilehash, filehash, bhmapfile, relpath) == -1)
+    if (update_hashtree_entry(parentdirhash, oldbhmap_exists, oldfilehash, filehash, bhmapfile, relpath) == -1)
         return -1;
 
     return 0;
@@ -210,7 +101,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
 
 int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::string &bhmapfile, const std::string &relpath)
 {
-    bhmapfile.reserve(blockhashmapdir.length() + relpath.length() + EXT_LEN);
+    bhmapfile.reserve(blockhashmapdir.length() + relpath.length() + HASHMAP_EXT_LEN);
     bhmapfile.append(blockhashmapdir).append(relpath).append(HASHMAP_EXT);
 
     oldbhmap_exists = boost::filesystem::exists(bhmapfile);
@@ -226,7 +117,7 @@ int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::
         }
     }
 
-    hmapfd = open(bhmapfile.data(), O_RDWR | O_CREAT, 0644);
+    hmapfd = open(bhmapfile.data(), O_RDWR | O_CREAT, FILE_PERMS);
     if (hmapfd == -1)
     {
         std::cerr << "Open failed " << bhmapfile << '\n';
@@ -239,7 +130,7 @@ int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::
 int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, const std::string &filerelpath)
 {
     std::string bindexfile;
-    bindexfile.reserve(changesetdir.length() + filerelpath.length() + EXT_LEN);
+    bindexfile.reserve(changesetdir.length() + filerelpath.length() + BLOCKINDEX_EXT_LEN);
     bindexfile.append(changesetdir).append(filerelpath).append(BLOCKINDEX_EXT);
 
     if (boost::filesystem::exists(bindexfile))
@@ -296,7 +187,7 @@ int hashmap_builder::get_updatedhashes(
     if (oldhmap_exists)
     {
         // If we are not loading all hashes from the .bhmap, just load the root hash from it.
-        const off_t readlen = loadhashes_frombhmap ? newhmap_filesize : HASH_SIZE;
+        const off_t readlen = loadhashes_frombhmap ? newhmap_filesize : hasher::HASH_SIZE;
 
         if (pread(hmapfd, hashes, readlen, 0) == -1)
         {
@@ -341,7 +232,7 @@ int hashmap_builder::get_updatedhashes(
     return 0;
 }
 
-int hashmap_builder::update_hashtree_forfile(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath)
+int hashmap_builder::update_hashtree_entry(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath)
 {
     std::string hardlinkdir(hashtreedir);
     const std::string relpathdir = boost::filesystem::path(relpath).parent_path().string();
@@ -368,13 +259,6 @@ int hashmap_builder::update_hashtree_forfile(hasher::B2H &parentdirhash, const b
     }
     else
     {
-        // Create directory tree if not exist so we are able to create the root hash map files.
-        if (created_htreesubdirs.count(hardlinkdir) == 0)
-        {
-            boost::filesystem::create_directories(hardlinkdir);
-            created_htreesubdirs.emplace(hardlinkdir);
-        }
-
         // Create a new hard link with new root hash as the name.
         if (link(bhmapfile.c_str(), newhlpath.str().c_str()) == -1)
             return -1;
@@ -386,29 +270,4 @@ int hashmap_builder::update_hashtree_forfile(hasher::B2H &parentdirhash, const b
     return 0;
 }
 
-} // namespace statehashmap
-
-int main(int argc, char *argv[])
-{
-    if (argc == 5)
-    {
-        statehashmap::hashmap_builder builder(
-            realpath(argv[1], NULL),
-            realpath(argv[2], NULL),
-            realpath(argv[3], NULL),
-            realpath(argv[4], NULL));
-        builder.generate();
-        std::cout << "Done.\n";
-    }
-    else if (argc == 2)
-    {
-        // Print the hashes in bhmap file.
-        const char *hmapfile = realpath(argv[1], NULL);
-        hasher::B2H hash[4];
-        int fd = open(hmapfile, O_RDONLY);
-        int res = read(fd, hash, 128);
-
-        for (int i = 0; i < 4; i++)
-            std::cout << std::hex << hash[i].data[0] << hash[i].data[1] << hash[i].data[2] << hash[i].data[3] << "\n";
-    }
-}
+} // namespace statefs

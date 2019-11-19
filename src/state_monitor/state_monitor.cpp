@@ -11,24 +11,12 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include "../hasher.hpp"
+#include "../state_common.hpp"
 #include "state_monitor.hpp"
-#include "hasher.hpp"
 
-namespace fusefs
+namespace statefs
 {
-
-// Cache block size.
-constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
-
-// Cache block index entry bytes length.
-constexpr size_t BLOCKINDEX_ENTRY_SIZE = 44;
-
-// Permissions used when creating block cache and index files.
-constexpr int FILE_PERMS = 0644;
-
-constexpr size_t EXT_LEN = 7;
-const char *const BLOCKCACHE_EXT = ".bcache";
-const char *const BLOCKINDEX_EXT = ".bindex";
 
 void state_monitor::oncreate(const int fd)
 {
@@ -337,7 +325,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
 
     std::string tmppath;
-    tmppath.reserve(changesetdir.length() + relpath.length() + EXT_LEN);
+    tmppath.reserve(changesetdir.length() + relpath.length() + BLOCKCACHE_EXT_LEN);
 
     tmppath.append(changesetdir).append(relpath).append(BLOCKCACHE_EXT);
 
@@ -358,7 +346,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     }
 
     // Create and open the block index file.
-    tmppath.replace(tmppath.length() - EXT_LEN, EXT_LEN, BLOCKINDEX_EXT);
+    tmppath.replace(tmppath.length() - BLOCKCACHE_EXT_LEN, BLOCKINDEX_EXT_LEN, BLOCKINDEX_EXT);
     fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fi.indexfd <= 0)
     {
@@ -479,4 +467,4 @@ void state_monitor::remove_newfileentry(std::string_view filepath)
         std::remove(indexfile_tmp.c_str());
 }
 
-} // namespace fusefs
+} // namespace statefs

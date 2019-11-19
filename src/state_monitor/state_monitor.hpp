@@ -1,5 +1,5 @@
-#ifndef _STATE_MONITOR_
-#define _STATE_MONITOR_
+#ifndef _STATEFS_STATE_MONITOR_
+#define _STATEFS_STATE_MONITOR_
 
 #include <cstdint>
 #include <sys/types.h>
@@ -8,7 +8,7 @@
 #include <mutex>
 #include <boost/filesystem.hpp>
 
-namespace fusefs
+namespace statefs
 {
 
 // Holds information about an original file in state that we are tracking.
@@ -29,7 +29,7 @@ class state_monitor
 private:
     // Map of fd-->filepath
     std::unordered_map<int, std::string> fdpathmap;
-    
+
     // Map of filepath-->fileinfo
     std::unordered_map<std::string, state_file_info> fileinfomap;
 
@@ -71,6 +71,6 @@ public:
     void onclose(const int fd);
 };
 
-} // namespace fusefs
+} // namespace statefs
 
 #endif

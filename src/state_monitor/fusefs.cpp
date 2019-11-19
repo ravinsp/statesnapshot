@@ -145,7 +145,7 @@ struct Fs
     bool nocache;
 };
 static Fs fs{};
-static state_monitor statemonitor;
+static statefs::state_monitor statemonitor;
 
 #define FUSE_BUF_COPY_FLAGS \
     (fs.nosplice ? FUSE_BUF_NO_SPLICE : static_cast<fuse_buf_copy_flags>(0))
@@ -1316,3 +1316,47 @@ err_out1:
 }
 
 } // namespace fusefs
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4)
+    {
+        std::cerr << "Incorrect arguments.\n";
+        exit(1);
+    }
+
+    // We need an fd for every dentry in our the filesystem that the
+    // kernel knows about. This is way more than most processes need,
+    // so try to get rid of any resource softlimit.
+    fusefs::maximize_fd_limit();
+
+    char *sourcedir = argv[1];
+    char *mountpoint = argv[2];
+    char *changesetdir = argv[3];
+
+    if (!boost::filesystem::exists(sourcedir))
+    {
+        std::cerr << "sourcedir does not exist.\n";
+        exit(1);
+    }
+
+    if (!boost::filesystem::exists(mountpoint))
+    {
+        std::cerr << "mountpoint does not exist.\n";
+        exit(1);
+    }
+
+    if (boost::filesystem::exists(changesetdir))
+    {
+        std::cerr << "changesetdir already exist.\n";
+        exit(1);
+    }
+
+    boost::filesystem::create_directories(changesetdir);
+
+    sourcedir = realpath(argv[1], NULL);
+    mountpoint = realpath(argv[2], NULL);
+    changesetdir = realpath(argv[3], NULL);
+
+    fusefs::start(argv[0], sourcedir, mountpoint, changesetdir);
+}
