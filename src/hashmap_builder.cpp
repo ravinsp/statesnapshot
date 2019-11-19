@@ -40,7 +40,7 @@ int hashmap_builder::generate_filehashmaps()
     std::unordered_set<std::string> filepathhints;
     populate_paths_toset(filepathhints, std::string(changesetdir).append(IDX_TOUCHEDFILES));
     populate_paths_toset(filepathhints, std::string(changesetdir).append(IDX_NEWFILES));
-    
+
     // If filepath hints are not provided, simply generate block hash map for the
     // entire statedir recursively.
     if (filepathhints.empty())
@@ -55,8 +55,8 @@ int hashmap_builder::generate_filehashmaps()
     }
     else
     {
-        for (const std::string &filepath : filepathhints)
-            generate_hashmap_forfile(filepath);
+        //for (const std::string &filepath : filepathhints)
+            //generate_hashmap_forfile(filepath);
     }
 
     return 0;
@@ -88,7 +88,7 @@ void hashmap_builder::populate_paths_toset(std::unordered_set<std::string> &line
     }
 }
 
-int hashmap_builder::generate_hashmap_forfile(std::string_view filepath)
+int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath)
 {
     // We attempt to avoid a full rebuild of the block hash map file when possible.
     // For this optimisation, both the block hash map (.bhmap) file and the
@@ -98,19 +98,19 @@ int hashmap_builder::generate_hashmap_forfile(std::string_view filepath)
     // Block index file contains the total length of original file and updated block hashes.
     // If not, we simply read the original file and recalculate all the block hashes.
 
-    std::string_view relpath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+    const std::string &relpath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
 
     uint32_t blockcount = 0;
     int orifd = 0, hmapfd = 0;
-    bool oldhmap_exists = false;
+    bool oldbhmap_exists = false;
 
     std::string bhmapfile;
-    if (open_blockhashmap(hmapfd, oldhmap_exists, bhmapfile, relpath) != 0)
+    if (open_blockhashmap(hmapfd, oldbhmap_exists, bhmapfile, relpath) == -1)
         return -1;
 
     // Attempt to read the block index file.
     std::map<uint32_t, hasher::B2H> bindex;
-    if (get_blockindex(bindex, blockcount, relpath) != 0)
+    if (get_blockindex(bindex, blockcount, relpath) == -1)
         return -1;
 
     // No need to read original file if the block index has all the blocks information.
@@ -137,83 +137,44 @@ int hashmap_builder::generate_hashmap_forfile(std::string_view filepath)
     // recalculated from original file.
     hasher::B2H hashes[1 + blockcount]; // slot 0 is for the root hash.
     const size_t newhmap_filesize = (1 + blockcount) * HASH_SIZE;
-    get_updatedhashes(hashes, relpath, oldhmap_exists, hmapfd, orifd, blockcount, bindex, newhmap_filesize);
+    if (get_updatedhashes(
+            hashes, relpath, oldbhmap_exists, hmapfd, orifd,
+            blockcount, bindex, newhmap_filesize) == -1)
+        return -1;
 
-    // Calculate the root file hash (we XOR all the block hashes).
-    hasher::B2H roothash = {0, 0, 0, 0};
+    // Calculate the new file hash: filehash = HASH(filename + XOR(block hashes))
+    hasher::B2H filehash = {0, 0, 0, 0};
     for (int i = 1; i < blockcount; i++)
-    {
-        roothash.data[0] ^= hashes[i].data[0];
-        roothash.data[1] ^= hashes[i].data[1];
-        roothash.data[2] ^= hashes[i].data[2];
-        roothash.data[3] ^= hashes[i].data[3];
-    }
+        filehash ^= hashes[i];
 
-    // Rehash the root hash with filename included.
+    // Rehash the file hash with filename included.
     const std::string filename = boost::filesystem::path(relpath.data()).filename().string();
-    roothash = hasher::hash(filename.c_str(), filename.length(), &roothash, HASH_SIZE);
-    hashes[0] = roothash;
+    filehash = hasher::hash(filename.c_str(), filename.length(), &filehash, HASH_SIZE);
+
+    // Get the old file hash before we assign the new root hash.
+    hasher::B2H oldfilehash = hashes[0];
+    hashes[0] = filehash;
 
     // Write the updated hash list into the block hash map file.
-    pwrite(hmapfd, &hashes, newhmap_filesize, 0);
-    ftruncate(hmapfd, newhmap_filesize);
-
-    return 0;
-}
-
-int hashmap_builder::get_updatedhashes(
-    hasher::B2H *hashes, std::string_view relpath, const bool oldhmap_exists, const int hmapfd, const int orifd,
-    const uint32_t blockcount, const std::map<uint32_t, hasher::B2H> bindex, const off_t newhmap_filesize)
-{
-    // Load up old hashes from the hashmap file if the block index exists.
-    // This will allow us to only update the new hashes using the block index.
-    const bool loadfromhmap = !bindex.empty() && oldhmap_exists;
-
-    if (loadfromhmap && pread(hmapfd, hashes, newhmap_filesize, 0) == -1)
-    {
-        std::cerr << "Read failed on block hash map for " << relpath << '\n';
+    if (pwrite(hmapfd, &hashes, newhmap_filesize, 0) == -1)
         return -1;
-    }
+    if (ftruncate(hmapfd, newhmap_filesize) == -1)
+        return -1;
 
-    for (uint32_t blockid = 0; blockid < blockcount; blockid++)
-    {
-        // We already have a hash loaded from block hash map file (if it exists).
-        bool hashfound = loadfromhmap;
-
-        // Retrieve up-to-date hash from the block index if any.
-        const auto itr = bindex.find(blockid);
-        if (itr != bindex.end())
-        {
-            hashes[blockid + 1] = itr->second;
-            hashfound = true;
-        }
-
-        // If all above attempts fail, compute the hash using raw data block.
-        if (!hashfound)
-        {
-            char block[BLOCK_SIZE];
-            const off_t blockoffset = BLOCK_SIZE * blockid;
-            if (pread(orifd, block, BLOCK_SIZE, blockoffset) == -1)
-            {
-                std::cerr << "Read failed " << relpath << '\n';
-                return -1;
-            }
-
-            hashes[blockid + 1] = hasher::hash(&blockoffset, 8, block, BLOCK_SIZE);
-        }
-    }
+    if (update_roothashmap_forfile(parentdirhash, oldbhmap_exists, oldfilehash, filehash, bhmapfile, relpath) == -1)
+        return -1;
 
     return 0;
 }
 
-int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldhmap_exists, std::string &bhmapfile, std::string_view relpath)
+int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::string &bhmapfile, const std::string &relpath)
 {
     bhmapfile.reserve(blockhashmapdir.length() + relpath.length() + EXT_LEN);
     bhmapfile.append(blockhashmapdir).append(relpath).append(HASHMAP_EXT);
 
-    oldhmap_exists = boost::filesystem::exists(bhmapfile);
+    oldbhmap_exists = boost::filesystem::exists(bhmapfile);
 
-    if (!oldhmap_exists)
+    if (!oldbhmap_exists)
     {
         // Create directory tree if not exist so we are able to create the hashmap files.
         boost::filesystem::path hmapsubdir = boost::filesystem::path(bhmapfile).parent_path();
@@ -234,7 +195,7 @@ int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldhmap_exists, std::s
     return 0;
 }
 
-int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, std::string_view filerelpath)
+int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, const std::string &filerelpath)
 {
     std::string bindexfile;
     bindexfile.reserve(changesetdir.length() + filerelpath.length() + EXT_LEN);
@@ -278,6 +239,107 @@ int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uin
         }
 
         infile.close();
+    }
+
+    return 0;
+}
+
+int hashmap_builder::get_updatedhashes(
+    hasher::B2H *hashes, const std::string &relpath, const bool oldhmap_exists, const int hmapfd, const int orifd,
+    const uint32_t blockcount, const std::map<uint32_t, hasher::B2H> bindex, const off_t newhmap_filesize)
+{
+    // Load up old hashes from the hashmap file if the block index exists.
+    // This will allow us to update the new hashes only using the block index.
+    const bool loadhashes_frombhmap = !bindex.empty() && oldhmap_exists;
+
+    if (oldhmap_exists)
+    {
+        // If we are not loading all hashes from the .bhmap, just load the root hash from it.
+        const off_t readlen = loadhashes_frombhmap ? newhmap_filesize : HASH_SIZE;
+
+        if (pread(hmapfd, hashes, readlen, 0) == -1)
+        {
+            std::cerr << "Read failed on block hash map for " << relpath << '\n';
+            return -1;
+        }
+    }
+    else
+    {
+        // Reset the root hash so we don't retain any uninitialized memory.
+        hashes[0] = {0, 0, 0, 0};
+    }
+
+    for (uint32_t blockid = 0; blockid < blockcount; blockid++)
+    {
+        // We may already have a block hash loaded from block hash map file (if it exists).
+        bool hashfound = loadhashes_frombhmap;
+
+        // Retrieve more up-to-date hash from the block index if any.
+        const auto itr = bindex.find(blockid);
+        if (itr != bindex.end())
+        {
+            hashes[blockid + 1] = itr->second;
+            hashfound = true;
+        }
+
+        // If all above attempts fail, compute the hash using raw data block.
+        if (!hashfound)
+        {
+            char block[BLOCK_SIZE];
+            const off_t blockoffset = BLOCK_SIZE * blockid;
+            if (pread(orifd, block, BLOCK_SIZE, blockoffset) == -1)
+            {
+                std::cerr << "Read failed " << relpath << '\n';
+                return -1;
+            }
+
+            hashes[blockid + 1] = hasher::hash(&blockoffset, 8, block, BLOCK_SIZE);
+        }
+    }
+
+    return 0;
+}
+
+int hashmap_builder::update_roothashmap_forfile(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath)
+{
+    std::string hardlinkdir(roothashmapdir);
+    const std::string relpathdir = boost::filesystem::path(relpath).parent_path().string();
+
+    hardlinkdir.append(relpathdir);
+    if (relpathdir != "/")
+        hardlinkdir.append("/");
+
+    std::stringstream newhlpath(std::ios_base::out | std::ios_base::ate);
+    newhlpath << hardlinkdir << newfilehash << ".rh";
+
+    if (oldbhmap_exists)
+    {
+        // Rename the existing hard link if old block hash map existed.
+        // We thereby assume the old hard link also existed.
+        std::stringstream oldhlpath(std::ios_base::out | std::ios_base::ate);
+        oldhlpath << hardlinkdir << oldfilehash << ".rh";
+        if (rename(oldhlpath.str().c_str(), newhlpath.str().c_str()) == -1)
+            return -1;
+
+        // Subtract the old root hash and add the new root hash from the parent dir hash.
+        parentdirhash ^= oldfilehash;
+        parentdirhash ^= newfilehash;
+    }
+    else
+    {
+        // Create directory tree if not exist so we are able to create the root hash map files.
+        if (created_rhmapsubdirs.count(hardlinkdir) == 0)
+        {
+            boost::filesystem::create_directories(hardlinkdir);
+            created_rhmapsubdirs.emplace(hardlinkdir);
+        }
+
+        // Create a new hard link with new root hash as the name.
+        if (link(bhmapfile.c_str(), newhlpath.str().c_str()) == -1)
+            return -1;
+
+        // Add the new root hash to parent hash.
+        parentdirhash ^= newfilehash;
     }
 
     return 0;
