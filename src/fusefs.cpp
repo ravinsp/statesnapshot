@@ -1250,11 +1250,11 @@ void maximize_fd_limit()
         warn("WARNING: setrlimit() failed with");
 }
 
-int start(const char *arg0, const char *sourcedir, const char *mountpoint, const char *cachedir)
+int start(const char *arg0, const char *sourcedir, const char *mountpoint, const char *changesetdir)
 {
     fs.source = std::string(sourcedir);
     statemonitor.statedir = fs.source;
-    statemonitor.cachedir = std::string(cachedir);
+    statemonitor.changesetdir = std::string(changesetdir);
 
     // Initialize filesystem root
     fs.root.fd = -1;

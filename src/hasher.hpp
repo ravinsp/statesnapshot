@@ -22,7 +22,6 @@ bool operator==(B2H &lhs, B2H &rhs)
 // the actual hash function, note that the B2H datatype is always passed by value being only 4 quadwords
 B2H hash(const void *buf1,size_t buf1len, const void *buf2, size_t buf2len)
 {
-    B2H ret;
     crypto_generichash_blake2b_state state;
     crypto_generichash_blake2b_init(&state, NULL, 0, HASH_SIZE);
 
@@ -30,6 +29,7 @@ B2H hash(const void *buf1,size_t buf1len, const void *buf2, size_t buf2len)
                                       reinterpret_cast<const unsigned char *>(buf1), buf1len);
     crypto_generichash_blake2b_update(&state,
                                       reinterpret_cast<const unsigned char *>(buf2), buf2len);
+    B2H ret;
     crypto_generichash_blake2b_final(
         &state,
         reinterpret_cast<unsigned char *>(&ret),

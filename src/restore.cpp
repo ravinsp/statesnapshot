@@ -20,9 +20,9 @@ constexpr size_t BLOCK_SIZE = 4 * 1024; //* 1024; // 4MB
 std::unordered_set<std::string> created_dirs;
 
 // Look at new files added and delete them if still exist.
-void delete_newfiles(const char *statedir, const char *chkpntdir)
+void delete_newfiles(const char *statedir, const char *changesetdir)
 {
-    std::string indexfile(chkpntdir);
+    std::string indexfile(changesetdir);
     indexfile.append(IDX_NEWFILES);
 
     std::ifstream infile(indexfile);
@@ -37,9 +37,9 @@ void delete_newfiles(const char *statedir, const char *chkpntdir)
     infile.close();
 }
 
-int read_blockindex(std::vector<char> &buffer, std::string_view file, const char *statedir, const char *chkpntdir)
+int read_blockindex(std::vector<char> &buffer, std::string_view file, const char *statedir, const char *changesetdir)
 {
-    std::string bindexfile(chkpntdir);
+    std::string bindexfile(changesetdir);
     bindexfile.append(file).append(BLOCKINDEX_EXT);
     std::ifstream infile(bindexfile, std::ios::binary | std::ios::ate);
     std::streamsize idxsize = infile.tellg();
@@ -55,7 +55,7 @@ int read_blockindex(std::vector<char> &buffer, std::string_view file, const char
     return 0;
 }
 
-int restore_blocks(std::string_view file, const std::vector<char> &bindex, const char *statedir, const char *chkpntdir)
+int restore_blocks(std::string_view file, const std::vector<char> &bindex, const char *statedir, const char *changesetdir)
 {
     int bcachefd = 0, orifilefd = 0;
     const char *idxptr = bindex.data();
@@ -66,7 +66,7 @@ int restore_blocks(std::string_view file, const std::vector<char> &bindex, const
 
     // Open block cache file.
     {
-        std::string bcachefile(chkpntdir);
+        std::string bcachefile(changesetdir);
         bcachefile.append(file).append(BLOCKCACHE_EXT);
         bcachefd = open(bcachefile.c_str(), O_RDONLY);
         if (bcachefd <= 0)
@@ -126,15 +126,15 @@ int restore_blocks(std::string_view file, const std::vector<char> &bindex, const
     return 0;
 }
 
-int restore(const char *statedir, const char *chkpntdir)
+int restore(const char *statedir, const char *changesetdir)
 {
-    delete_newfiles(statedir, chkpntdir);
+    delete_newfiles(statedir, changesetdir);
 
     // Look at touched files and restore them.
     {
         std::unordered_set<std::string> processed;
 
-        std::string indexfile(chkpntdir);
+        std::string indexfile(changesetdir);
         indexfile.append(IDX_TOUCHEDFILES);
 
         std::ifstream infile(indexfile);
@@ -145,10 +145,10 @@ int restore(const char *statedir, const char *chkpntdir)
                 continue;
 
             std::vector<char> bindex;
-            if (read_blockindex(bindex, file, statedir, chkpntdir) != 0)
+            if (read_blockindex(bindex, file, statedir, changesetdir) != 0)
                 return -1;
 
-            if (restore_blocks(file, bindex, statedir, chkpntdir) != 0)
+            if (restore_blocks(file, bindex, statedir, changesetdir) != 0)
                 return -1;
 
             // Add to processed file list.

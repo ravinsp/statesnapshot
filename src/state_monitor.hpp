@@ -61,7 +61,7 @@ private:
 
 public:
     std::string statedir;
-    std::string cachedir;
+    std::string changesetdir;
     void oncreate(const int fd);
     void onopen(const int inodefd, const int flags);
     void onwrite(const int fd, const off_t offset, const size_t length);

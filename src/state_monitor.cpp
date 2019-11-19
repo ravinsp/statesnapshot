@@ -337,9 +337,9 @@ int state_monitor::prepare_caching(state_file_info &fi)
     std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
 
     std::string tmppath;
-    tmppath.reserve(cachedir.length() + relpath.length() + EXT_LEN);
+    tmppath.reserve(changesetdir.length() + relpath.length() + EXT_LEN);
 
-    tmppath.append(cachedir).append(relpath).append(BLOCKCACHE_EXT);
+    tmppath.append(changesetdir).append(relpath).append(BLOCKCACHE_EXT);
 
     // Create directory tree if not exist so we are able to create the cache and index files.
     boost::filesystem::path cachesubdir = boost::filesystem::path(tmppath).parent_path();
@@ -404,7 +404,7 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
 {
     if (touchedfileindexfd <= 0)
     {
-        std::string indexfile = cachedir + "/idxtouched.idx";
+        std::string indexfile = changesetdir + "/idxtouched.idx";
         touchedfileindexfd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
         if (touchedfileindexfd <= 0)
         {
@@ -426,7 +426,7 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
  */
 int state_monitor::write_newfileentry(std::string_view filepath)
 {
-    std::string indexfile = cachedir + "/idxnew.idx";
+    std::string indexfile = changesetdir + "/idxnew.idx";
     int fd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fd <= 0)
     {
@@ -450,8 +450,8 @@ void state_monitor::remove_newfileentry(std::string_view filepath)
     // We create a copy of the new file index and transfer lines from first file
     // to the second file except the line matching the given filepath.
 
-    std::string indexfile = cachedir + "/idxnew.idx";
-    std::string indexfile_tmp = cachedir + "/idxnew.idx.tmp";
+    std::string indexfile = changesetdir + "/idxnew.idx";
+    std::string indexfile_tmp = changesetdir + "/idxnew.idx.tmp";
 
     std::ifstream infile(indexfile);
     std::ofstream outfile(indexfile_tmp);
