@@ -435,6 +435,8 @@ int state_monitor::write_newfileentry(std::string_view filepath)
  */
 void state_monitor::remove_newfileentry(std::string_view filepath)
 {
+    filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+
     // We create a copy of the new file index and transfer lines from first file
     // to the second file except the line matching the given filepath.
 

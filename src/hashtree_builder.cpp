@@ -9,25 +9,17 @@
 namespace statefs
 {
 
-hashtree_builder::hashtree_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir) : statedir(statedir),
-                                                                                                                                           changesetdir(changesetdir),
-                                                                                                                                           blockhashmapdir(blockhashmapdir),
-                                                                                                                                           hashtreedir(hashtreedir),
-                                                                                                                                           hmapbuilder(hashmap_builder(statedir, changesetdir, blockhashmapdir, hashtreedir))
+hashtree_builder::hashtree_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir)
+    : statedir(statedir),
+      changesetdir(changesetdir),
+      blockhashmapdir(blockhashmapdir),
+      hashtreedir(hashtreedir),
+      hmapbuilder(hashmap_builder(statedir, changesetdir, blockhashmapdir, hashtreedir))
 {
 }
 
 int hashtree_builder::generate()
 {
-    if (!boost::filesystem::exists(statedir) ||
-        !boost::filesystem::exists(changesetdir) ||
-        !boost::filesystem::exists(blockhashmapdir) ||
-        !boost::filesystem::exists(hashtreedir))
-    {
-        std::cerr << "Specified directories does not exist.";
-        return -1;
-    }
-
     // Load modified file path hints if available.
     populate_hintpaths(IDX_TOUCHEDFILES);
     populate_hintpaths(IDX_NEWFILES);
@@ -142,12 +134,14 @@ void hashtree_builder::populate_hintpaths(const char *const idxfile)
 
 int main(int argc, char *argv[])
 {
-    if (argc == 5)
+    if (argc == 4 || argc == 5)
     {
         const char *statedir = realpath(argv[1], NULL);
-        const char *changesetdir = realpath(argv[2], NULL);
-        const char *blockhashmapdir = realpath(argv[3], NULL);
-        const char *hashtreedir = realpath(argv[4], NULL);
+        const char *blockhashmapdir = realpath(argv[2], NULL);
+        const char *hashtreedir = realpath(argv[3], NULL);
+
+        const char *changesetdir =
+            (argc == 5 && boost::filesystem::exists(argv[4])) ? realpath(argv[4], NULL) : "";
 
         statefs::hashtree_builder builder(statedir, changesetdir, blockhashmapdir, hashtreedir);
         if (builder.generate() == -1)
