@@ -23,6 +23,7 @@ add_executable(statemon
     src/state_monitor/fusefs.cpp
     src/state_monitor/state_monitor.cpp
     src/hasher.cpp
+    src/state_common.cpp
 )
 target_link_libraries(statemon
     libfuse3.so.3
@@ -32,15 +33,17 @@ target_link_libraries(statemon
 
 add_executable(restore
     src/state_restore.cpp
+    src/state_common.cpp
 )
 target_link_libraries(restore
     libboost_system.a
     libboost_filesystem.a)
 
 add_executable(hashmap
-    src/hasher.cpp
     src/hashtree_builder.cpp
     src/hashmap_builder.cpp
+    src/hasher.cpp
+    src/state_common.cpp
 )
 target_link_libraries(hashmap
     libboost_system.a

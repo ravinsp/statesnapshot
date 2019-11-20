@@ -30,6 +30,9 @@ const char *const IDX_NEWFILES = "/idxnew.idx";
 const char *const IDX_TOUCHEDFILES = "/idxtouched.idx";
 const char *const DIRHASH_FNAME = "dir.hash";
 
+const std::string get_relpath(const std::string &fullpath, const std::string &base_path);
+const std::string switch_basepath(const std::string &fullpath, const std::string &from_base_path, const std::string &to_base_path);
+
 } // namespace statefs
 
 #endif

@@ -270,14 +270,8 @@ int hashmap_builder::update_hashtree_entry(hasher::B2H &parentdirhash, const boo
     return 0;
 }
 
-int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::string &filepath)
+int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::string &bhmapfile)
 {
-    const std::string &relpath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
-
-    std::string bhmapfile;
-    bhmapfile.reserve(blockhashmapdir.length() + relpath.length() + HASHMAP_EXT_LEN);
-    bhmapfile.append(blockhashmapdir).append(relpath).append(HASHMAP_EXT);
-
     if (boost::filesystem::exists(bhmapfile))
     {
         int hmapfd = open(bhmapfile.data(), O_RDONLY);
@@ -303,6 +297,7 @@ int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::s
 
         // Delete the hardlink of the .bhmap file.
         std::string hardlinkdir(hashtreedir);
+        const std::string relpath = get_relpath(bhmapfile, blockhashmapdir);
         const std::string relpathdir = boost::filesystem::path(relpath).parent_path().string();
 
         hardlinkdir.append(relpathdir);

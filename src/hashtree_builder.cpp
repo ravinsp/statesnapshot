@@ -47,8 +47,8 @@ int hashtree_builder::generate()
 
 int hashtree_builder::update_hashtree()
 {
-    hintpath_map::iterator hintdir_itr;
-    if (!should_process_dir(hintdir_itr, "/"))
+    hintpath_map::iterator hintdir_itr = hintpaths.end();
+    if (!should_process_dir(hintdir_itr, traversel_rootdir))
         return 0;
 
     hasher::B2H emptyhash{0, 0, 0, 0};
@@ -60,10 +60,7 @@ int hashtree_builder::update_hashtree()
 
 int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &dirpath, const hintpath_map::iterator hintdir_itr)
 {
-    std::cout << "Visited: " << dirpath << " Removal mode:" << removal_mode << "\n";
-
-    const std::string &relpath = dirpath.substr(traversel_rootdir.length(), dirpath.length() - traversel_rootdir.length());
-    const std::string htreedirpath = hashtreedir + relpath;
+    const std::string htreedirpath = switch_basepath(dirpath, traversel_rootdir, hashtreedir);
 
     // Load current dir hash if exist.
     const std::string dirhashfile = htreedirpath + "/" + DIRHASH_FNAME;
@@ -81,7 +78,7 @@ int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const s
 
         if (isdir)
         {
-            hintpath_map::iterator hintsubdir_itr;
+            hintpath_map::iterator hintsubdir_itr = hintpaths.end();
             if (!should_process_dir(hintsubdir_itr, pathstr))
                 continue;
 
@@ -90,7 +87,7 @@ int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const s
         }
         else
         {
-            if (!should_process_file(pathstr, hintdir_itr))
+            if (!should_process_file(hintdir_itr, pathstr))
                 continue;
 
             if (process_file(dirhash, pathstr, htreedirpath) == -1)
@@ -98,7 +95,19 @@ int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const s
         }
     }
 
-    if (dirhash != original_dirhash)
+    // In removalmode, we check whether the dir is empty. If so we remove the dir as well.
+    if (removal_mode && boost::filesystem::is_empty(dirpath))
+    {
+        if (remove(dirpath.c_str()) == -1)
+            return -1;
+
+        if (remove(dirhashfile.c_str()) == -1)
+            return -1;
+
+        // Subtract the original dir hash from the parent dir hash.
+        parentdirhash ^= original_dirhash;
+    }
+    else if (dirhash != original_dirhash)
     {
         // If dir hash has changed, write it back to dir hash file.
         if (save_dirhash(dirhashfile, dirhash) == -1)
@@ -130,29 +139,38 @@ int hashtree_builder::save_dirhash(const std::string &dirhashfile, hasher::B2H d
     int dirhashfd = open(dirhashfile.c_str(), O_RDWR | O_TRUNC | O_CREAT, FILE_PERMS);
     if (dirhashfd == -1)
         return -1;
+
     if (write(dirhashfd, &dirhash, hasher::HASH_SIZE) == -1)
     {
         close(dirhashfd);
         return -1;
     }
+
     close(dirhashfd);
     return 0;
 }
 
 inline bool hashtree_builder::should_process_dir(hintpath_map::iterator &dir_itr, const std::string &dirpath)
 {
-    return hintmode ? get_hinteddir_match(dir_itr, dirpath) : true;
+    return (hintmode ? get_hinteddir_match(dir_itr, dirpath) : true);
 }
 
-bool hashtree_builder::should_process_file(const std::string filepath, const hintpath_map::iterator hintdir_itr)
+bool hashtree_builder::should_process_file(const hintpath_map::iterator hintdir_itr, const std::string filepath)
 {
     if (hintmode)
     {
         if (hintdir_itr == hintpaths.end())
             return false;
 
+        std::string relpath = get_relpath(filepath, traversel_rootdir);
+
+        // If in removal mode, we are traversing .bhmap files. Hence we should truncate .bhmap extension
+        // before we search for the path in file hints.
+        if (removal_mode)
+            relpath = relpath.substr(0, relpath.length() - HASHMAP_EXT_LEN);
+
         std::unordered_set<std::string> &hintfiles = hintdir_itr->second;
-        const auto hintfile_itr = hintfiles.find(filepath);
+        const auto hintfile_itr = hintfiles.find(relpath);
         if (hintfile_itr == hintfiles.end())
             return false;
 
@@ -196,32 +214,33 @@ void hashtree_builder::populate_hintpaths(const char *const idxfile)
     {
         for (std::string relpath; std::getline(infile, relpath);)
         {
-            std::string filepath = statedir + relpath;
-            std::string parentdir = boost::filesystem::path(filepath).parent_path().string();
-            hintpaths[parentdir].emplace(filepath);
+            std::string parentdir = boost::filesystem::path(relpath).parent_path().string();
+            hintpaths[parentdir].emplace(relpath);
+            std::cout << "populate: " << parentdir << " :: " << relpath << "\n";
         }
         infile.close();
     }
 }
 
-bool hashtree_builder::get_hinteddir_match(hintpath_map::iterator &itr, const std::string &dirpath)
+bool hashtree_builder::get_hinteddir_match(hintpath_map::iterator &matchitr, const std::string &dirpath)
 {
     // First check whether there's an exact match. If not check for a partial match.
     // Exact match will return the iterator. Partial match or not found will return end() iterator.
+    const std::string relpath = get_relpath(dirpath, traversel_rootdir);
+    const auto exactmatchitr = hintpaths.find(relpath);
 
-    const auto exactmatchitr = hintpaths.find(dirpath);
     if (exactmatchitr != hintpaths.end())
     {
-        itr = exactmatchitr;
+        matchitr = exactmatchitr;
         return true;
     }
 
     for (auto itr = hintpaths.begin(); itr != hintpaths.end(); itr++)
     {
-        if (strncmp(dirpath.c_str(), itr->first.c_str(), dirpath.length()) == 0)
+        if (strncmp(relpath.c_str(), itr->first.c_str(), relpath.length()) == 0)
         {
             // Partial match found.
-            itr = hintpaths.end();
+            matchitr = hintpaths.end();
             return true;
         }
     }
