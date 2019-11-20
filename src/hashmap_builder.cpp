@@ -30,7 +30,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
     // Block index file contains the total length of original file and updated block hashes.
     // If not, we simply read the original file and recalculate all the block hashes.
 
-    const std::string &relpath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+    std::string relpath = get_relpath(filepath, statedir);
 
     uint32_t blockcount = 0;
     int orifd = 0, hmapfd = 0;

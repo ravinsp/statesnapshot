@@ -29,9 +29,6 @@ int hashtree_builder::generate()
     removal_mode = false;
     update_hashtree();
 
-    for (const auto &[d, t] : hintpaths)
-        std::cout << d << " remaining\n";
-
     // If there are any remaining hint files directly under this directory, that means
     // those files are no longer there. So we need to delete the corresponding .bhmap and rh files
     // and adjust the directory hash accordingly.
@@ -95,14 +92,15 @@ int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const s
         }
     }
 
+    // If there are no more files in the hint dir, delete the hint dir entry as well.
+    if (hintdir_itr != hintpaths.end() && hintdir_itr->second.empty())
+        hintpaths.erase(hintdir_itr);
+
     // In removalmode, we check whether the dir is empty. If so we remove the dir as well.
     if (removal_mode && boost::filesystem::is_empty(dirpath))
     {
-        if (remove(dirpath.c_str()) == -1)
-            return -1;
-
-        if (remove(dirhashfile.c_str()) == -1)
-            return -1;
+        boost::filesystem::remove_all(dirpath);
+        boost::filesystem::remove_all(htreedirpath);
 
         // Subtract the original dir hash from the parent dir hash.
         parentdirhash ^= original_dirhash;
@@ -176,10 +174,6 @@ bool hashtree_builder::should_process_file(const hintpath_map::iterator hintdir_
 
         // Erase the visiting filepath from hint files.
         hintfiles.erase(hintfile_itr);
-
-        // If there are no more files in the hint dir, delete the hin dir entry as well.
-        if (hintfiles.empty())
-            hintpaths.erase(hintdir_itr);
     }
     return true;
 }
@@ -216,7 +210,6 @@ void hashtree_builder::populate_hintpaths(const char *const idxfile)
         {
             std::string parentdir = boost::filesystem::path(relpath).parent_path().string();
             hintpaths[parentdir].emplace(relpath);
-            std::cout << "populate: " << parentdir << " :: " << relpath << "\n";
         }
         infile.close();
     }

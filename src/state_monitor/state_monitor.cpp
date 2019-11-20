@@ -322,7 +322,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
 
     // Get the path of the file relative to the state dir. We maintain this same reative path for the
     // corresponding cache and index files in the cache dir.
-    std::string relpath = fi.filepath.substr(statedir.length(), fi.filepath.length() - statedir.length());
+    std::string relpath = get_relpath(fi.filepath, statedir);
 
     std::string tmppath;
     tmppath.reserve(changesetdir.length() + relpath.length() + BLOCKCACHE_EXT_LEN);
