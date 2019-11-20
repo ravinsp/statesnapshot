@@ -8,20 +8,34 @@
 namespace statefs
 {
 
+typedef std::unordered_map<std::string, std::unordered_set<std::string>> hintpath_map;
+
 class hashtree_builder
 {
 private:
     const std::string statedir, changesetdir, blockhashmapdir, hashtreedir;
     hashmap_builder hmapbuilder;
 
-    std::unordered_set<std::string> filepathhints;
+    // Hint path map with parent dir as key and list of file paths under each parent dir.
+    hintpath_map hintpaths;
+    bool hintmode;
+    bool removal_mode;
+    std::string traversel_rootdir;
+
     // List of new root hash map sub directories created during the session.
     std::unordered_set<std::string> created_htreesubdirs;
 
-    int update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &relpath);
+    int update_hashtree();
+    int update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &relpath, const hintpath_map::iterator hintdir_itr);
+
+    hasher::B2H get_existingdirhash(const std::string &dirhashfile);
+    int save_dirhash(const std::string &dirhashfile, hasher::B2H dirhash);
+    inline bool should_process_dir(hintpath_map::iterator &hintsubdir_itr, const std::string &dirpath);
+    bool should_process_file(const std::string filepath, const hintpath_map::iterator hintdir_itr);
+    int process_file(hasher::B2H &parentdirhash, const std::string &filepath, const std::string &htreedirpath);
     int update_hashtree_entry(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath);
     void populate_hintpaths(const char *const idxfile);
-    bool is_hinted_path(const std::string &path, const bool isdir);
+    bool get_hinteddir_match(hintpath_map::iterator &itr, const std::string &dirpath);
 
 public:
     hashtree_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir);

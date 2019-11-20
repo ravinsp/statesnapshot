@@ -28,6 +28,7 @@ private:
 public:
     hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir);
     int generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath);
+    int remove_hashmapfile(hasher::B2H &parentdirhash, const std::string &filepath);
 };
 
 } // namespace statefs

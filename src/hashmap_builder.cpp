@@ -12,11 +12,11 @@
 namespace statefs
 {
 
-hashmap_builder::hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir) : 
-    statedir(statedir),
-    changesetdir(changesetdir),
-    blockhashmapdir(blockhashmapdir),
-    hashtreedir(hashtreedir)
+hashmap_builder::hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir)
+    : statedir(statedir),
+      changesetdir(changesetdir),
+      blockhashmapdir(blockhashmapdir),
+      hashtreedir(hashtreedir)
 {
 }
 
@@ -241,14 +241,14 @@ int hashmap_builder::update_hashtree_entry(hasher::B2H &parentdirhash, const boo
     if (relpathdir != "/")
         hardlinkdir.append("/");
 
-    std::stringstream newhlpath(std::ios_base::out | std::ios_base::ate);
+    std::stringstream newhlpath;
     newhlpath << hardlinkdir << newfilehash << ".rh";
 
     if (oldbhmap_exists)
     {
         // Rename the existing hard link if old block hash map existed.
         // We thereby assume the old hard link also existed.
-        std::stringstream oldhlpath(std::ios_base::out | std::ios_base::ate);
+        std::stringstream oldhlpath;
         oldhlpath << hardlinkdir << oldfilehash << ".rh";
         if (rename(oldhlpath.str().c_str(), newhlpath.str().c_str()) == -1)
             return -1;
@@ -265,6 +265,60 @@ int hashmap_builder::update_hashtree_entry(hasher::B2H &parentdirhash, const boo
 
         // Add the new root hash to parent hash.
         parentdirhash ^= newfilehash;
+    }
+
+    return 0;
+}
+
+int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::string &filepath)
+{
+    const std::string &relpath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+
+    std::string bhmapfile;
+    bhmapfile.reserve(blockhashmapdir.length() + relpath.length() + HASHMAP_EXT_LEN);
+    bhmapfile.append(blockhashmapdir).append(relpath).append(HASHMAP_EXT);
+
+    if (boost::filesystem::exists(bhmapfile))
+    {
+        int hmapfd = open(bhmapfile.data(), O_RDONLY);
+        if (hmapfd == -1)
+        {
+            std::cerr << "Open failed " << bhmapfile << '\n';
+            return -1;
+        }
+
+        hasher::B2H filehash;
+        if (read(hmapfd, &filehash, hasher::HASH_SIZE) == -1)
+        {
+            std::cerr << "Read failed " << bhmapfile << '\n';
+            return -1;
+        }
+
+        // Delete the .bhmap file.
+        if (remove(bhmapfile.c_str()) == -1)
+        {
+            std::cerr << "Delete failed " << bhmapfile << '\n';
+            return -1;
+        }
+
+        // Delete the hardlink of the .bhmap file.
+        std::string hardlinkdir(hashtreedir);
+        const std::string relpathdir = boost::filesystem::path(relpath).parent_path().string();
+
+        hardlinkdir.append(relpathdir);
+        if (relpathdir != "/")
+            hardlinkdir.append("/");
+
+        std::stringstream hlpath;
+        hlpath << hardlinkdir << filehash << ".rh";
+        if (remove(hlpath.str().c_str()) == -1)
+        {
+            std::cerr << "Delete failed for halrd link " << filehash << " of " << bhmapfile << '\n';
+            return -1;
+        }
+
+        // XOR parent dir hash with file hash so the file hash gets removed from parent dir hash.
+        parentdirhash ^= filehash;
     }
 
     return 0;
