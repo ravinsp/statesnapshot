@@ -2,6 +2,7 @@
 #define _STATEFS_STATE_COMMON_
 
 #include <sys/types.h>
+#include <string>
 #include "hasher.hpp"
 
 namespace statefs
@@ -30,6 +31,16 @@ const char *const IDX_NEWFILES = "/idxnew.idx";
 const char *const IDX_TOUCHEDFILES = "/idxtouched.idx";
 const char *const DIRHASH_FNAME = "dir.hash";
 
+const char *const DATA_DIR = "/data";
+const char *const BHMAP_DIR = "/bhmap";
+const char *const HTREE_DIR = "/htree";
+const char *const DELTA_DIR = "/delta";
+const char *const FUSE_DIR = "/fusemnt";
+
+constexpr int16_t MAX_CHECKPOINTS = 5;
+
+extern std::string statehistdir;
+
 struct statedirctx
 {
     std::string rootdir;
@@ -37,9 +48,12 @@ struct statedirctx
     std::string blockhashmapdir;
     std::string hashtreedir;
     std::string changesetdir;
+    std::string fusemountdir;
 };
 
-statedirctx get_statedir_context(const std::string statehistdir, int16_t stateid = 0, bool createdirs = false);
+statedirctx init(const std::string &statehistdir_root);
+std::string get_statedir_root(const int16_t checkpointid);
+statedirctx get_statedir_context(int16_t checkpointid = 0, bool createdirs = false);
 std::string get_relpath(const std::string &fullpath, const std::string &base_path);
 std::string switch_basepath(const std::string &fullpath, const std::string &from_base_path, const std::string &to_base_path);
 

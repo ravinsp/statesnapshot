@@ -269,7 +269,7 @@ int main(int argc, char *argv[])
         }
         else
         {
-            statefs::statedirctx ctx = statefs::get_statedir_context(argv[1]);
+            statefs::statedirctx ctx = statefs::init(argv[1]);
             statefs::hashtree_builder builder(ctx);
             if (builder.generate() == -1)
                 std::cerr << "Generation failed\n";
@@ -279,7 +279,7 @@ int main(int argc, char *argv[])
     }
     else if (argc == 3 && std::string(argv[1]) == "restore")
     {
-        statefs::state_restore staterestore(argv[1]);
+        statefs::state_restore staterestore;
         if (staterestore.rollback() == -1)
             std::cerr << "Rollback failed.\n";
         else

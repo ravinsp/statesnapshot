@@ -5,17 +5,31 @@
 namespace statefs
 {
 
-statedirctx get_statedir_context(const std::string statehistdir, const int16_t stateid, const bool createdirs)
+std::string statehistdir;
+
+statedirctx init(const std::string &statehistdir_root)
+{
+    // Initialize 0 state (current state) directory and return the directory context for it.
+    statehistdir = statehistdir_root;
+    return get_statedir_context(0, true);
+}
+
+std::string get_statedir_root(const int16_t checkpointid)
 {
     std::string rootdir = realpath(statehistdir.c_str(), NULL);
-    rootdir.append("/0");
+    rootdir = rootdir + "/" + std::to_string(checkpointid);
+    return rootdir;
+}
 
+statedirctx get_statedir_context(const int16_t checkpointid, const bool createdirs)
+{
     statedirctx ctx;
-    ctx.rootdir = rootdir;
-    ctx.datadir = rootdir + "/data";
-    ctx.blockhashmapdir = rootdir + "/bhmaps";
-    ctx.hashtreedir = rootdir + "/htree";
-    ctx.changesetdir = rootdir + "/delta";
+    ctx.rootdir = get_statedir_root(checkpointid);
+    ctx.datadir = ctx.rootdir + DATA_DIR;
+    ctx.blockhashmapdir = ctx.rootdir + BHMAP_DIR;
+    ctx.hashtreedir = ctx.rootdir + HTREE_DIR;
+    ctx.changesetdir = ctx.rootdir + DELTA_DIR;
+    ctx.fusemountdir = ctx.rootdir + FUSE_DIR;
 
     if (createdirs)
     {
@@ -27,33 +41,11 @@ statedirctx get_statedir_context(const std::string statehistdir, const int16_t s
             boost::filesystem::create_directories(ctx.hashtreedir);
         if (!boost::filesystem::exists(ctx.changesetdir))
             boost::filesystem::create_directories(ctx.changesetdir);
+        if (!boost::filesystem::exists(ctx.fusemountdir))
+            boost::filesystem::create_directories(ctx.fusemountdir);
     }
 
     return ctx;
-}
-
-void create_checkpoint(const std::string statehistdir)
-{
-    int16_t n = 0;
-    bool prevstatedir_existed;
-
-    do
-    {
-        statedirctx ctx_n = get_statedir_context(statehistdir, n, n == 0);
-        statedirctx ctx_n1 = get_statedir_context(statehistdir, n - 1, false);
-
-        prevstatedir_existed = boost::filesystem::exists(ctx_n1.rootdir);
-
-        if (!prevstatedir_existed)
-            boost::filesystem::create_directories(ctx_n1.changesetdir);
-
-        boost::filesystem::rename(ctx_n1.changesetdir, (ctx_n1.changesetdir + ".tmp"));
-
-        boost::filesystem::rename(ctx_n.changesetdir, ctx_n1.changesetdir);
-
-        n--;
-
-    } while (prevstatedir_existed);
 }
 
 std::string get_relpath(const std::string &fullpath, const std::string &base_path)

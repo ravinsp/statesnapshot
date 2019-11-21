@@ -14,10 +14,6 @@
 namespace statefs
 {
 
-state_restore::state_restore(const std::string statehistdir) : statehistdir(statehistdir)
-{
-}
-
 // Look at new files added and delete them if still exist.
 void state_restore::delete_newfiles()
 {
@@ -157,7 +153,7 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
 
 int state_restore::rollback()
 {
-    ctx = get_statedir_context(statehistdir);
+    ctx = get_statedir_context();
 
     delete_newfiles();
     if (restore_touchedfiles() == -1)

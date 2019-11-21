@@ -1253,10 +1253,16 @@ void maximize_fd_limit()
 
 int start(const char *arg0, const char *statehistdir)
 {
-    statefs::statedirctx dirctx = statefs::get_statedir_context(statehistdir);
+    // We consider this as the first run of the history dir is empty.
+    const bool firstrun = boost::filesystem::is_empty(statehistdir);
+
+    statefs::statedirctx dirctx = statefs::init(statehistdir);
     fs.source = dirctx.datadir;
     statemonitor.ctx = dirctx;
-    const std::string mountpoint = dirctx.rootdir + "/fusemnt";
+
+    // Create a checkpoint from the second run onwards.
+    if (!firstrun)
+        statemonitor.create_checkpoint();
 
     // Initialize filesystem root
     fs.root.fd = -1;
@@ -1300,7 +1306,7 @@ int start(const char *arg0, const char *statehistdir)
     struct fuse_loop_config loop_config;
     loop_config.clone_fd = 0;
     loop_config.max_idle_threads = 10;
-    if (fuse_session_mount(se, mountpoint.c_str()) != 0)
+    if (fuse_session_mount(se, dirctx.fusemountdir.c_str()) != 0)
         goto err_out3;
 
     ret = fuse_session_loop_mt(se, &loop_config);

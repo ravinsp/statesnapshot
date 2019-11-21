@@ -18,6 +18,45 @@
 namespace statefs
 {
 
+void state_monitor::create_checkpoint()
+{
+    // Shift -1 and below checkpoints by 1 more.
+    // If MAX oldest checkpoint is there, remove it and work our way upwards.
+    int16_t oldest_chkpnt = MAX_CHECKPOINTS * -1;
+
+    for (int16_t chkpnt = oldest_chkpnt; chkpnt <= -1; chkpnt++)
+    {
+        std::string dir = get_statedir_root(chkpnt);
+
+        if (boost::filesystem::exists(dir))
+        {
+            if (chkpnt == oldest_chkpnt)
+            {
+                boost::filesystem::remove_all(dir);
+            }
+            else
+            {
+                std::string dirshift = get_statedir_root(chkpnt - 1);
+                boost::filesystem::rename(dir, dirshift);
+            }
+        }
+
+        if (chkpnt == -1)
+        {
+            statedirctx ctx = get_statedir_context(0, true);
+
+            // Shift 0-state changeset dir to -1.
+            std::string delta_1 = dir + DELTA_DIR;
+            boost::filesystem::create_directories(delta_1);
+
+            boost::filesystem::rename(ctx.changesetdir, delta_1);
+            boost::filesystem::create_directories(ctx.changesetdir);
+        }
+    }
+
+    return;
+}
+
 void state_monitor::oncreate(const int fd)
 {
     std::lock_guard<std::mutex> lock(monitor_mutex);
