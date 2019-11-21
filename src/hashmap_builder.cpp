@@ -48,7 +48,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
         orifd = open(filepath.data(), O_RDONLY);
         if (orifd == -1)
         {
-            std::cerr << "Open failed " << filepath << '\n';
+            std::cerr << errno << ": Open failed " << filepath << '\n';
             return -1;
         }
 
@@ -116,7 +116,7 @@ int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::
     hmapfd = open(bhmapfile.data(), O_RDWR | O_CREAT, FILE_PERMS);
     if (hmapfd == -1)
     {
-        std::cerr << "Open failed " << bhmapfile << '\n';
+        std::cerr << errno << ": Open failed " << bhmapfile << '\n';
         return -1;
     }
 
@@ -162,7 +162,7 @@ int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uin
         }
         else
         {
-            std::cerr << "Read failed " << bindexfile << '\n';
+            std::cerr << errno << ": Read failed " << bindexfile << '\n';
             return -1;
         }
 
@@ -187,7 +187,7 @@ int hashmap_builder::get_updatedhashes(
 
         if (pread(hmapfd, hashes, readlen, 0) == -1)
         {
-            std::cerr << "Read failed on block hash map for " << relpath << '\n';
+            std::cerr << errno << ": Read failed on block hash map for " << relpath << '\n';
             return -1;
         }
     }
@@ -217,7 +217,7 @@ int hashmap_builder::get_updatedhashes(
             const off_t blockoffset = BLOCK_SIZE * blockid;
             if (pread(orifd, block, BLOCK_SIZE, blockoffset) == -1)
             {
-                std::cerr << "Read failed " << relpath << '\n';
+                std::cerr << errno << ": Read failed " << relpath << '\n';
                 return -1;
             }
 
@@ -273,21 +273,21 @@ int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::s
         int hmapfd = open(bhmapfile.data(), O_RDONLY);
         if (hmapfd == -1)
         {
-            std::cerr << "Open failed " << bhmapfile << '\n';
+            std::cerr << errno << ": Open failed " << bhmapfile << '\n';
             return -1;
         }
 
         hasher::B2H filehash;
         if (read(hmapfd, &filehash, hasher::HASH_SIZE) == -1)
         {
-            std::cerr << "Read failed " << bhmapfile << '\n';
+            std::cerr << errno << ": Read failed " << bhmapfile << '\n';
             return -1;
         }
 
         // Delete the .bhmap file.
         if (remove(bhmapfile.c_str()) == -1)
         {
-            std::cerr << "Delete failed " << bhmapfile << '\n';
+            std::cerr << errno << ": Delete failed " << bhmapfile << '\n';
             return -1;
         }
 
@@ -304,7 +304,7 @@ int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::s
         hlpath << hardlinkdir << filehash << ".rh";
         if (remove(hlpath.str().c_str()) == -1)
         {
-            std::cerr << "Delete failed for halrd link " << filehash << " of " << bhmapfile << '\n';
+            std::cerr << errno << ": Delete failed for halrd link " << filehash << " of " << bhmapfile << '\n';
             return -1;
         }
 

@@ -73,7 +73,7 @@ int state_restore::read_blockindex(std::vector<char> &buffer, std::string_view f
     buffer.resize(idxsize);
     if (!infile.read(buffer.data(), idxsize))
     {
-        std::cout << "Failed to read " << bindexfile << "\n";
+        std::cerr << errno << ": Read failed " << bindexfile << "\n";
         return -1;
     }
 
@@ -96,7 +96,7 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
         bcachefd = open(bcachefile.c_str(), O_RDONLY);
         if (bcachefd <= 0)
         {
-            std::cout << "Error opening " << bcachefile << "\n";
+            std::cerr << errno << ": Open failed " << bcachefile << "\n";
             return -1;
         }
     }
@@ -117,7 +117,7 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
         orifilefd = open(originalfile.c_str(), O_WRONLY | O_CREAT, FILE_PERMS);
         if (orifilefd <= 0)
         {
-            std::cout << "Error opening " << originalfile << "\n";
+            std::cerr << errno << ": Open failed " << originalfile << "\n";
             return -1;
         }
     }
@@ -151,6 +151,37 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
     return 0;
 }
 
+void state_restore::rewind_checkpoints()
+{
+    // Assuming we have restored the current state with current changeset,
+    // we need to shift each history changeset by 1 place.
+
+    // Delete the state 0 (current) changeset.
+    boost::filesystem::remove_all(ctx.changesetdir);
+
+    int16_t oldest_chkpnt = (MAX_CHECKPOINTS + 1) * -1; // +1 because we maintain one extra checkpoint in case of rollbacks.
+    for (int16_t chkpnt = -1; chkpnt >= oldest_chkpnt; chkpnt--)
+    {
+        std::string dir = get_statedir_root(chkpnt);
+
+        if (boost::filesystem::exists(dir))
+        {
+            if (chkpnt == -1)
+            {
+                // Shift -1 state changeset dir to 0-state and delete -1 dir.
+                std::string delta_1 = dir + DELTA_DIR;
+                boost::filesystem::rename(delta_1, ctx.changesetdir);
+                boost::filesystem::remove_all(dir);
+            }
+            else
+            {
+                std::string dirshift = get_statedir_root(chkpnt + 1);
+                boost::filesystem::rename(dir, dirshift);
+            }
+        }
+    }
+}
+
 int state_restore::rollback()
 {
     ctx = get_statedir_context();
@@ -162,6 +193,8 @@ int state_restore::rollback()
     // Update hash tree.
     hashtree_builder htreebuilder(ctx);
     htreebuilder.generate();
+
+    rewind_checkpoints();
 
     return 0;
 }

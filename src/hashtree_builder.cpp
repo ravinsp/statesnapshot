@@ -45,13 +45,13 @@ int hashtree_builder::update_hashtree()
         return 0;
 
     hasher::B2H emptyhash{0, 0, 0, 0};
-    if (update_hashtree_fordir(emptyhash, traversel_rootdir, hintdir_itr) == -1)
+    if (update_hashtree_fordir(emptyhash, traversel_rootdir, hintdir_itr, true) == -1)
         return -1;
 
     return 0;
 }
 
-int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &dirpath, const hintpath_map::iterator hintdir_itr)
+int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &dirpath, const hintpath_map::iterator hintdir_itr, const bool isrootlevel)
 {
     const std::string htreedirpath = switch_basepath(dirpath, traversel_rootdir, ctx.hashtreedir);
 
@@ -75,7 +75,7 @@ int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const s
             if (!should_process_dir(hintsubdir_itr, pathstr))
                 continue;
 
-            if (update_hashtree_fordir(dirhash, pathstr, hintsubdir_itr) == -1)
+            if (update_hashtree_fordir(dirhash, pathstr, hintsubdir_itr, false) == -1)
                 return -1;
         }
         else
@@ -95,8 +95,17 @@ int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const s
     // In removalmode, we check whether the dir is empty. If so we remove the dir as well.
     if (removal_mode && boost::filesystem::is_empty(dirpath))
     {
-        boost::filesystem::remove_all(dirpath);
-        boost::filesystem::remove_all(htreedirpath);
+        // We remove the dirs if we are below root level only.
+        // Otherwise we only remove root dir.hash file.
+        if (!isrootlevel)
+        {
+            boost::filesystem::remove_all(dirpath);
+            boost::filesystem::remove_all(htreedirpath);
+        }
+        else
+        {
+            boost::filesystem::remove(dirhashfile);
+        }
 
         // Subtract the original dir hash from the parent dir hash.
         parentdirhash ^= original_dirhash;
@@ -279,6 +288,7 @@ int main(int argc, char *argv[])
     }
     else if (argc == 3 && std::string(argv[1]) == "restore")
     {
+        statefs::init(argv[2]);
         statefs::state_restore staterestore;
         if (staterestore.rollback() == -1)
             std::cerr << "Rollback failed.\n";

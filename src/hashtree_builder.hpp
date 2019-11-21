@@ -27,7 +27,7 @@ private:
     std::unordered_set<std::string> created_htreesubdirs;
 
     int update_hashtree();
-    int update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &relpath, const hintpath_map::iterator hintdir_itr);
+    int update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &relpath, const hintpath_map::iterator hintdir_itr, const bool isrootlevel);
 
     hasher::B2H get_existingdirhash(const std::string &dirhashfile);
     int save_dirhash(const std::string &dirhashfile, hasher::B2H dirhash);

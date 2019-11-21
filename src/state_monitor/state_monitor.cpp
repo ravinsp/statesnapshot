@@ -11,6 +11,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <errno.h>
 #include "../hasher.hpp"
 #include "../state_common.hpp"
 #include "state_monitor.hpp"
@@ -22,8 +23,7 @@ void state_monitor::create_checkpoint()
 {
     // Shift -1 and below checkpoints by 1 more.
     // If MAX oldest checkpoint is there, remove it and work our way upwards.
-    int16_t oldest_chkpnt = MAX_CHECKPOINTS * -1;
-
+    int16_t oldest_chkpnt = (MAX_CHECKPOINTS + 1) * -1; // +1 because we maintain one extra checkpoint in case of rollbacks.
     for (int16_t chkpnt = oldest_chkpnt; chkpnt <= -1; chkpnt++)
     {
         std::string dir = get_statedir_root(chkpnt);
@@ -248,7 +248,7 @@ int state_monitor::get_tracked_fileinfo(state_file_info **fi, const std::string 
     struct stat stat_buf;
     if (stat(filepath.c_str(), &stat_buf) != 0)
     {
-        std::cerr << "Error occured in stat() of " << filepath << "\n";
+        std::cerr << errno << ": Error occured in stat() of " << filepath << "\n";
         return -1;
     }
 
@@ -305,13 +305,13 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         off_t blockoffset = BLOCK_SIZE * i;
         if (pread(fi.readfd, blockbuf, BLOCK_SIZE, BLOCK_SIZE * i) <= 0)
         {
-            std::cerr << "Read failed " << fi.filepath << "\n";
+            std::cerr << errno << ": Read failed " << fi.filepath << "\n";
             return -1;
         }
 
         if (write(fi.cachefd, blockbuf, BLOCK_SIZE) < 0)
         {
-            std::cerr << "Write to block cache failed\n";
+            std::cerr << errno << ": Write to block cache failed\n";
             return -1;
         }
 
@@ -329,7 +329,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         memcpy(entrybuf + 12, hash.data, 32);
         if (write(fi.indexfd, entrybuf, BLOCKINDEX_ENTRY_SIZE) < 0)
         {
-            std::cerr << "Write to block index failed\n";
+            std::cerr << errno << ": Write to block index failed\n";
             return -1;
         }
 
@@ -355,7 +355,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     fi.readfd = open(fi.filepath.c_str(), O_RDONLY);
     if (fi.readfd < 0)
     {
-        std::cerr << "Failed to open " << fi.filepath << "\n";
+        std::cerr << errno << ": Open failed " << fi.filepath << "\n";
         return -1;
     }
 
@@ -379,7 +379,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     fi.cachefd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fi.cachefd <= 0)
     {
-        std::cerr << "Failed to open " << tmppath << "\n";
+        std::cerr << errno << ": Open failed " << tmppath << "\n";
         return -1;
     }
 
@@ -388,7 +388,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     fi.indexfd = open(tmppath.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fi.indexfd <= 0)
     {
-        std::cerr << "Failed to open " << tmppath << "\n";
+        std::cerr << errno << ": Open failed " << tmppath << "\n";
         return -1;
     }
 
@@ -396,7 +396,7 @@ int state_monitor::prepare_caching(state_file_info &fi)
     // This will be helpful when restoring/rolling back a file.
     if (write(fi.indexfd, &fi.original_length, 8) == -1)
     {
-        std::cerr << "Error writing to index file " << tmppath << "\n";
+        std::cerr << errno << ": Error writing to index file " << tmppath << "\n";
         return -1;
     }
 
@@ -434,7 +434,7 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
         touchedfileindexfd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
         if (touchedfileindexfd <= 0)
         {
-            std::cerr << "Failed to open " << indexfile << "\n";
+            std::cerr << errno << ": Open failed " << indexfile << "\n";
             return -1;
         }
     }
@@ -456,7 +456,7 @@ int state_monitor::write_newfileentry(std::string_view filepath)
     int fd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fd <= 0)
     {
-        std::cerr << "Failed to open " << indexfile << "\n";
+        std::cerr << errno << ": Open failed " << indexfile << "\n";
         return -1;
     }
 

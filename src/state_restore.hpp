@@ -19,6 +19,7 @@ private:
     int restore_touchedfiles();
     int read_blockindex(std::vector<char> &buffer, std::string_view file);
     int restore_blocks(std::string_view file, const std::vector<char> &bindex);
+    void rewind_checkpoints();
 
 public:
     int rollback();
