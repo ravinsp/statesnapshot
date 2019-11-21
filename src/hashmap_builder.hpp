@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_set>
 #include "hasher.hpp"
+#include "state_common.hpp"
 
 namespace statefs
 {
@@ -14,7 +15,7 @@ namespace statefs
 class hashmap_builder
 {
 private:
-    const std::string statedir, changesetdir, blockhashmapdir, hashtreedir;
+    const statedirctx &ctx;
     // List of new block hash map sub directories created during the session.
     std::unordered_set<std::string> created_bhmapsubdirs;
 
@@ -26,7 +27,7 @@ private:
     int update_hashtree_entry(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath);
 
 public:
-    hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir);
+    hashmap_builder(const statedirctx &ctx);
     int generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath);
     int remove_hashmapfile(hasher::B2H &parentdirhash, const std::string &filepath);
 };

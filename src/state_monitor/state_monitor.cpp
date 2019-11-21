@@ -322,12 +322,11 @@ int state_monitor::prepare_caching(state_file_info &fi)
 
     // Get the path of the file relative to the state dir. We maintain this same reative path for the
     // corresponding cache and index files in the cache dir.
-    std::string relpath = get_relpath(fi.filepath, statedir);
+    std::string relpath = get_relpath(fi.filepath, ctx.datadir);
 
     std::string tmppath;
-    tmppath.reserve(changesetdir.length() + relpath.length() + BLOCKCACHE_EXT_LEN);
-
-    tmppath.append(changesetdir).append(relpath).append(BLOCKCACHE_EXT);
+    tmppath.reserve(ctx.changesetdir.length() + relpath.length() + BLOCKCACHE_EXT_LEN);
+    tmppath.append(ctx.changesetdir).append(relpath).append(BLOCKCACHE_EXT);
 
     // Create directory tree if not exist so we are able to create the cache and index files.
     boost::filesystem::path cachesubdir = boost::filesystem::path(tmppath).parent_path();
@@ -392,7 +391,7 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
 {
     if (touchedfileindexfd <= 0)
     {
-        std::string indexfile = changesetdir + "/idxtouched.idx";
+        std::string indexfile = ctx.changesetdir + "/idxtouched.idx";
         touchedfileindexfd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
         if (touchedfileindexfd <= 0)
         {
@@ -402,7 +401,7 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
     }
 
     // Write the relative file path line to the index.
-    filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+    filepath = filepath.substr(ctx.datadir.length(), filepath.length() - ctx.datadir.length());
     write(touchedfileindexfd, filepath.data(), filepath.length());
     write(touchedfileindexfd, "\n", 1);
     return 0;
@@ -414,7 +413,7 @@ int state_monitor::write_touchedfileentry(std::string_view filepath)
  */
 int state_monitor::write_newfileentry(std::string_view filepath)
 {
-    std::string indexfile = changesetdir + "/idxnew.idx";
+    std::string indexfile = ctx.changesetdir + "/idxnew.idx";
     int fd = open(indexfile.c_str(), O_WRONLY | O_APPEND | O_CREAT, FILE_PERMS);
     if (fd <= 0)
     {
@@ -423,7 +422,7 @@ int state_monitor::write_newfileentry(std::string_view filepath)
     }
 
     // Write the relative file path line to the index.
-    filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+    filepath = filepath.substr(ctx.datadir.length(), filepath.length() - ctx.datadir.length());
     write(fd, filepath.data(), filepath.length());
     write(fd, "\n", 1);
     close(fd);
@@ -435,13 +434,13 @@ int state_monitor::write_newfileentry(std::string_view filepath)
  */
 void state_monitor::remove_newfileentry(std::string_view filepath)
 {
-    filepath = filepath.substr(statedir.length(), filepath.length() - statedir.length());
+    filepath = filepath.substr(ctx.datadir.length(), filepath.length() - ctx.datadir.length());
 
     // We create a copy of the new file index and transfer lines from first file
     // to the second file except the line matching the given filepath.
 
-    std::string indexfile = changesetdir + "/idxnew.idx";
-    std::string indexfile_tmp = changesetdir + "/idxnew.idx.tmp";
+    std::string indexfile = ctx.changesetdir + "/idxnew.idx";
+    std::string indexfile_tmp = ctx.changesetdir + "/idxnew.idx.tmp";
 
     std::ifstream infile(indexfile);
     std::ofstream outfile(indexfile_tmp);

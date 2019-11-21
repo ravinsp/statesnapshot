@@ -39,6 +39,7 @@
 #include <iostream>
 #include <unordered_map>
 #include "state_monitor.hpp"
+#include "../state_common.hpp"
 
 using namespace std;
 
@@ -1250,11 +1251,12 @@ void maximize_fd_limit()
         warn("WARNING: setrlimit() failed with");
 }
 
-int start(const char *arg0, const char *sourcedir, const char *mountpoint, const char *changesetdir)
+int start(const char *arg0, const char *statehistdir)
 {
-    fs.source = std::string(sourcedir);
-    statemonitor.statedir = fs.source;
-    statemonitor.changesetdir = std::string(changesetdir);
+    statefs::statedirctx dirctx = statefs::get_statedir_context(statehistdir);
+    fs.source = dirctx.datadir;
+    statemonitor.ctx = dirctx;
+    const std::string mountpoint = dirctx.rootdir + "/fusemnt";
 
     // Initialize filesystem root
     fs.root.fd = -1;
@@ -1298,7 +1300,7 @@ int start(const char *arg0, const char *sourcedir, const char *mountpoint, const
     struct fuse_loop_config loop_config;
     loop_config.clone_fd = 0;
     loop_config.max_idle_threads = 10;
-    if (fuse_session_mount(se, mountpoint) != 0)
+    if (fuse_session_mount(se, mountpoint.c_str()) != 0)
         goto err_out3;
 
     ret = fuse_session_loop_mt(se, &loop_config);
@@ -1319,7 +1321,7 @@ err_out1:
 
 int main(int argc, char *argv[])
 {
-    if (argc != 4)
+    if (argc != 2)
     {
         std::cerr << "Incorrect arguments.\n";
         exit(1);
@@ -1330,33 +1332,5 @@ int main(int argc, char *argv[])
     // so try to get rid of any resource softlimit.
     fusefs::maximize_fd_limit();
 
-    char *sourcedir = argv[1];
-    char *mountpoint = argv[2];
-    char *changesetdir = argv[3];
-
-    if (!boost::filesystem::exists(sourcedir))
-    {
-        std::cerr << "sourcedir does not exist.\n";
-        exit(1);
-    }
-
-    if (!boost::filesystem::exists(mountpoint))
-    {
-        std::cerr << "mountpoint does not exist.\n";
-        exit(1);
-    }
-
-    if (boost::filesystem::exists(changesetdir))
-    {
-        std::cerr << "changesetdir already exist.\n";
-        exit(1);
-    }
-
-    boost::filesystem::create_directories(changesetdir);
-
-    sourcedir = realpath(argv[1], NULL);
-    mountpoint = realpath(argv[2], NULL);
-    changesetdir = realpath(argv[3], NULL);
-
-    fusefs::start(argv[0], sourcedir, mountpoint, changesetdir);
+    fusefs::start(argv[0], argv[1]);
 }

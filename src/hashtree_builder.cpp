@@ -4,17 +4,13 @@
 #include <fcntl.h>
 #include <boost/filesystem.hpp>
 #include "hashtree_builder.hpp"
+#include "state_restore.hpp"
 #include "state_common.hpp"
 
 namespace statefs
 {
 
-hashtree_builder::hashtree_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir)
-    : statedir(statedir),
-      changesetdir(changesetdir),
-      blockhashmapdir(blockhashmapdir),
-      hashtreedir(hashtreedir),
-      hmapbuilder(hashmap_builder(statedir, changesetdir, blockhashmapdir, hashtreedir))
+hashtree_builder::hashtree_builder(const statedirctx &ctx) : ctx(ctx), hmapbuilder(ctx)
 {
 }
 
@@ -25,7 +21,7 @@ int hashtree_builder::generate()
     populate_hintpaths(IDX_NEWFILES);
     hintmode = !hintpaths.empty();
 
-    traversel_rootdir = statedir;
+    traversel_rootdir = ctx.datadir;
     removal_mode = false;
     update_hashtree();
 
@@ -34,7 +30,7 @@ int hashtree_builder::generate()
     // and adjust the directory hash accordingly.
     if (hintmode && !hintpaths.empty())
     {
-        traversel_rootdir = blockhashmapdir;
+        traversel_rootdir = ctx.blockhashmapdir;
         removal_mode = true;
         update_hashtree();
     }
@@ -57,7 +53,7 @@ int hashtree_builder::update_hashtree()
 
 int hashtree_builder::update_hashtree_fordir(hasher::B2H &parentdirhash, const std::string &dirpath, const hintpath_map::iterator hintdir_itr)
 {
-    const std::string htreedirpath = switch_basepath(dirpath, traversel_rootdir, hashtreedir);
+    const std::string htreedirpath = switch_basepath(dirpath, traversel_rootdir, ctx.hashtreedir);
 
     // Load current dir hash if exist.
     const std::string dirhashfile = htreedirpath + "/" + DIRHASH_FNAME;
@@ -203,7 +199,7 @@ int hashtree_builder::process_file(hasher::B2H &parentdirhash, const std::string
 
 void hashtree_builder::populate_hintpaths(const char *const idxfile)
 {
-    std::ifstream infile(std::string(changesetdir).append(idxfile));
+    std::ifstream infile(std::string(ctx.changesetdir).append(idxfile));
     if (!infile.fail())
     {
         for (std::string relpath; std::getline(infile, relpath);)
@@ -245,33 +241,49 @@ bool hashtree_builder::get_hinteddir_match(hintpath_map::iterator &matchitr, con
 
 int main(int argc, char *argv[])
 {
-    if (argc == 4 || argc == 5)
+    if (argc == 2)
     {
-        const char *statedir = realpath(argv[1], NULL);
-        const char *blockhashmapdir = realpath(argv[2], NULL);
-        const char *hashtreedir = realpath(argv[3], NULL);
+        std::string arg1 = argv[1];
+        if (arg1.find(".bhmap") != std::string::npos)
+        {
+            std::string file = realpath(argv[1], NULL);
+            int fd = open(file.c_str(), O_RDONLY);
 
-        const char *changesetdir =
-            (argc == 5 && boost::filesystem::exists(argv[4])) ? realpath(argv[4], NULL) : "";
+            // Print the first 4 hashes in bhmap file.
+            hasher::B2H hash[4];
+            int res = read(fd, hash, 128);
+            for (int i = 0; i < 4; i++)
+                std::cout << std::hex << hash[i] << "\n";
+            close(fd);
+        }
+        else if (arg1.find("dir.hash") != std::string::npos)
+        {
+            std::string file = realpath(argv[1], NULL);
+            int fd = open(file.c_str(), O_RDONLY);
 
-        statefs::hashtree_builder builder(statedir, changesetdir, blockhashmapdir, hashtreedir);
-        if (builder.generate() == -1)
-            std::cerr << "Generation failed\n";
+            // Print dir hash.
+            hasher::B2H hash;
+            int res = read(fd, &hash, 32);
+            std::cout << std::hex << hash << "\n";
+            close(fd);
+        }
         else
-            std::cout << "Done.\n";
-    }
-    else if (argc == 2)
-    {
-        // Print the hashes in bhmap file.
-        const char *hmapfile = realpath(argv[1], NULL);
-        hasher::B2H hash[4];
-        int fd = open(hmapfile, O_RDONLY);
-        int res = read(fd, hash, 128);
-
-        for (int i = 0; i < 4; i++)
-            std::cout << std::hex << hash[i].data[0] << hash[i].data[1] << hash[i].data[2] << hash[i].data[3] << "\n";
+        {
+            statefs::statedirctx ctx = statefs::get_statedir_context(argv[1]);
+            statefs::hashtree_builder builder(ctx);
+            if (builder.generate() == -1)
+                std::cerr << "Generation failed\n";
+        }
 
         std::cout << "Done.\n";
+    }
+    else if (argc == 3 && std::string(argv[1]) == "restore")
+    {
+        statefs::state_restore staterestore(argv[1]);
+        if (staterestore.rollback() == -1)
+            std::cerr << "Rollback failed.\n";
+        else
+            std::cout << "Done.\n";
     }
     else
     {

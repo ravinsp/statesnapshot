@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include "hasher.hpp"
 #include "hashmap_builder.hpp"
+#include "state_common.hpp"
 
 namespace statefs
 {
@@ -13,7 +14,7 @@ typedef std::unordered_map<std::string, std::unordered_set<std::string>> hintpat
 class hashtree_builder
 {
 private:
-    const std::string statedir, changesetdir, blockhashmapdir, hashtreedir;
+    const statedirctx &ctx;
     hashmap_builder hmapbuilder;
 
     // Hint path map with parent dir as key and list of file paths under each parent dir.
@@ -38,7 +39,7 @@ private:
     bool get_hinteddir_match(hintpath_map::iterator &matchitr, const std::string &dirpath);
 
 public:
-    hashtree_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir);
+    hashtree_builder(const statedirctx &ctx);
     int generate();
 };
 

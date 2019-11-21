@@ -31,17 +31,10 @@ target_link_libraries(statemon
     libboost_system.a
     libboost_filesystem.a)
 
-add_executable(restore
-    src/state_restore.cpp
-    src/state_common.cpp
-)
-target_link_libraries(restore
-    libboost_system.a
-    libboost_filesystem.a)
-
 add_executable(hashmap
     src/hashtree_builder.cpp
     src/hashmap_builder.cpp
+    src/state_restore.cpp
     src/hasher.cpp
     src/state_common.cpp
 )
@@ -57,5 +50,4 @@ add_custom_target(docker
 )
 set_target_properties(docker PROPERTIES EXCLUDE_FROM_ALL TRUE)
 add_dependencies(docker
-    statemon
-    restore)
+    statemon)

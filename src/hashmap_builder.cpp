@@ -12,11 +12,7 @@
 namespace statefs
 {
 
-hashmap_builder::hashmap_builder(std::string statedir, std::string changesetdir, std::string blockhashmapdir, std::string hashtreedir)
-    : statedir(statedir),
-      changesetdir(changesetdir),
-      blockhashmapdir(blockhashmapdir),
-      hashtreedir(hashtreedir)
+hashmap_builder::hashmap_builder(const statedirctx &ctx) : ctx(ctx)
 {
 }
 
@@ -30,7 +26,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
     // Block index file contains the total length of original file and updated block hashes.
     // If not, we simply read the original file and recalculate all the block hashes.
 
-    std::string relpath = get_relpath(filepath, statedir);
+    std::string relpath = get_relpath(filepath, ctx.datadir);
 
     uint32_t blockcount = 0;
     int orifd = 0, hmapfd = 0;
@@ -101,8 +97,8 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
 
 int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::string &bhmapfile, const std::string &relpath)
 {
-    bhmapfile.reserve(blockhashmapdir.length() + relpath.length() + HASHMAP_EXT_LEN);
-    bhmapfile.append(blockhashmapdir).append(relpath).append(HASHMAP_EXT);
+    bhmapfile.reserve(ctx.blockhashmapdir.length() + relpath.length() + HASHMAP_EXT_LEN);
+    bhmapfile.append(ctx.blockhashmapdir).append(relpath).append(HASHMAP_EXT);
 
     oldbhmap_exists = boost::filesystem::exists(bhmapfile);
 
@@ -130,8 +126,8 @@ int hashmap_builder::open_blockhashmap(int &hmapfd, bool &oldbhmap_exists, std::
 int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, const std::string &filerelpath)
 {
     std::string bindexfile;
-    bindexfile.reserve(changesetdir.length() + filerelpath.length() + BLOCKINDEX_EXT_LEN);
-    bindexfile.append(changesetdir).append(filerelpath).append(BLOCKINDEX_EXT);
+    bindexfile.reserve(ctx.changesetdir.length() + filerelpath.length() + BLOCKINDEX_EXT_LEN);
+    bindexfile.append(ctx.changesetdir).append(filerelpath).append(BLOCKINDEX_EXT);
 
     if (boost::filesystem::exists(bindexfile))
     {
@@ -234,7 +230,7 @@ int hashmap_builder::get_updatedhashes(
 
 int hashmap_builder::update_hashtree_entry(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath)
 {
-    std::string hardlinkdir(hashtreedir);
+    std::string hardlinkdir(ctx.hashtreedir);
     const std::string relpathdir = boost::filesystem::path(relpath).parent_path().string();
 
     hardlinkdir.append(relpathdir);
@@ -296,8 +292,8 @@ int hashmap_builder::remove_hashmapfile(hasher::B2H &parentdirhash, const std::s
         }
 
         // Delete the hardlink of the .bhmap file.
-        std::string hardlinkdir(hashtreedir);
-        const std::string relpath = get_relpath(bhmapfile, blockhashmapdir);
+        std::string hardlinkdir(ctx.hashtreedir);
+        const std::string relpath = get_relpath(bhmapfile, ctx.blockhashmapdir);
         const std::string relpathdir = boost::filesystem::path(relpath).parent_path().string();
 
         hardlinkdir.append(relpathdir);

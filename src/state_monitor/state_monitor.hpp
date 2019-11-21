@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <mutex>
 #include <boost/filesystem.hpp>
+#include "../state_common.hpp"
 
 namespace statefs
 {
@@ -60,8 +61,7 @@ private:
     void remove_newfileentry(std::string_view filepath);
 
 public:
-    std::string statedir;
-    std::string changesetdir;
+    statedirctx ctx;
     void oncreate(const int fd);
     void onopen(const int inodefd, const int flags);
     void onwrite(const int fd, const off_t offset, const size_t length);

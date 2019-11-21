@@ -8,26 +8,26 @@
 #include <vector>
 #include <boost/filesystem.hpp>
 #include "state_restore.hpp"
+#include "hashtree_builder.hpp"
 #include "state_common.hpp"
 
 namespace statefs
 {
 
-state_restore::state_restore(std::string statedir, std::string changesetdir) : statedir(statedir),
-                                                                               changesetdir(changesetdir)
+state_restore::state_restore(const std::string statehistdir) : statehistdir(statehistdir)
 {
 }
 
 // Look at new files added and delete them if still exist.
 void state_restore::delete_newfiles()
 {
-    std::string indexfile(changesetdir);
+    std::string indexfile(ctx.changesetdir);
     indexfile.append(IDX_NEWFILES);
 
     std::ifstream infile(indexfile);
     for (std::string file; std::getline(infile, file);)
     {
-        std::string filepath(statedir);
+        std::string filepath(ctx.datadir);
         filepath.append(file);
 
         std::remove(filepath.c_str());
@@ -41,7 +41,7 @@ int state_restore::restore_touchedfiles()
 {
     std::unordered_set<std::string> processed;
 
-    std::string indexfile(changesetdir);
+    std::string indexfile(ctx.changesetdir);
     indexfile.append(IDX_TOUCHEDFILES);
 
     std::ifstream infile(indexfile);
@@ -68,7 +68,7 @@ int state_restore::restore_touchedfiles()
 
 int state_restore::read_blockindex(std::vector<char> &buffer, std::string_view file)
 {
-    std::string bindexfile(changesetdir);
+    std::string bindexfile(ctx.changesetdir);
     bindexfile.append(file).append(BLOCKINDEX_EXT);
     std::ifstream infile(bindexfile, std::ios::binary | std::ios::ate);
     std::streamsize idxsize = infile.tellg();
@@ -95,7 +95,7 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
 
     // Open block cache file.
     {
-        std::string bcachefile(changesetdir);
+        std::string bcachefile(ctx.changesetdir);
         bcachefile.append(file).append(BLOCKCACHE_EXT);
         bcachefd = open(bcachefile.c_str(), O_RDONLY);
         if (bcachefd <= 0)
@@ -107,7 +107,7 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
 
     // Create or Open original file.
     {
-        std::string originalfile(statedir);
+        std::string originalfile(ctx.datadir);
         originalfile.append(file);
 
         // Create directory tree if not exist so we are able to create the file.
@@ -155,34 +155,19 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
     return 0;
 }
 
-int state_restore::restore()
+int state_restore::rollback()
 {
+    ctx = get_statedir_context(statehistdir);
+
     delete_newfiles();
     if (restore_touchedfiles() == -1)
         return -1;
 
-    // If everything successful, delete the changeset dir.
-    boost::filesystem::remove_all(changesetdir);
+    // Update hash tree.
+    hashtree_builder htreebuilder(ctx);
+    htreebuilder.generate();
 
     return 0;
 }
 
 } // namespace statefs
-
-int main(int argc, char *argv[])
-{
-    if (argc != 3)
-    {
-        std::cerr << "Incorrect arguments.\n";
-        exit(1);
-    }
-
-    const char *statedir = realpath(argv[1], NULL);
-    const char *changesetdir = realpath(argv[2], NULL);
-    statefs::state_restore staterestore(statedir, changesetdir);
-
-    if (staterestore.restore() == -1)
-        std::cerr << "Restore failed.\n";
-    else
-        std::cout << "Done.\n";
-}

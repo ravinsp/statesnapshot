@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include "state_common.hpp"
 
 namespace statefs
 {
@@ -11,7 +12,8 @@ namespace statefs
 class state_restore
 {
 private:
-    const std::string statedir, changesetdir;
+    const std::string statehistdir;
+    statedirctx ctx;
     std::unordered_set<std::string> created_dirs;
     // Look at new files added and delete them if still exist.
     void delete_newfiles();
@@ -20,8 +22,8 @@ private:
     int restore_blocks(std::string_view file, const std::vector<char> &bindex);
 
 public:
-    state_restore(const std::string statedir, const std::string changesetdir);
-    int restore();
+    state_restore(const std::string statehistdir);
+    int rollback();
 };
 
 } // namespace statefs
