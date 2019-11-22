@@ -303,7 +303,7 @@ int state_monitor::cache_blocks(state_file_info &fi, const off_t offset, const s
         // Read the block being replaced and send to cache file.
         char blockbuf[BLOCK_SIZE];
         off_t blockoffset = BLOCK_SIZE * i;
-        if (pread(fi.readfd, blockbuf, BLOCK_SIZE, BLOCK_SIZE * i) <= 0)
+        if (pread(fi.readfd, blockbuf, BLOCK_SIZE, BLOCK_SIZE * i) < 0)
         {
             std::cerr << errno << ": Read failed " << fi.filepath << "\n";
             return -1;

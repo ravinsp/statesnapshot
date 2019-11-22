@@ -187,7 +187,7 @@ int hashtree_builder::process_file(hasher::B2H &parentdirhash, const std::string
 {
     if (!removal_mode)
     {
-        // Create directory tree if not exist so we are able to create the root hash map files.
+        // Create directory tree if not exist so we are able to create the file root hash files (hard links).
         if (created_htreesubdirs.count(htreedirpath) == 0)
         {
             boost::filesystem::create_directories(htreedirpath);
@@ -282,6 +282,13 @@ int main(int argc, char *argv[])
             statefs::hashtree_builder builder(ctx);
             if (builder.generate() == -1)
                 std::cerr << "Generation failed\n";
+
+            // Print root hash.
+            int fd = open(std::string(ctx.hashtreedir).append("/dir.hash").c_str(), O_RDONLY);
+            hasher::B2H hash;
+            int res = read(fd, &hash, 32);
+            std::cout << "State hash: " << std::hex << hash << "\n";
+            close(fd);
         }
 
         std::cout << "Done.\n";
@@ -292,8 +299,13 @@ int main(int argc, char *argv[])
         statefs::state_restore staterestore;
         if (staterestore.rollback() == -1)
             std::cerr << "Rollback failed.\n";
-        else
-            std::cout << "Done.\n";
+
+        // Print root hash.
+        int fd = open(std::string(statefs::statehistdir).append("/0/htree/dir.hash").c_str(), O_RDONLY);
+        hasher::B2H hash;
+        int res = read(fd, &hash, 32);
+        std::cout << "State hash: " << std::hex << hash << "\n";
+        close(fd);
     }
     else
     {
