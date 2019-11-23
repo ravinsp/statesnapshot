@@ -15,7 +15,7 @@ namespace statefs
 class hashmap_builder
 {
 private:
-    const statedirctx &ctx;
+    const statedir_context &ctx;
     // List of new block hash map sub directories created during the session.
     std::unordered_set<std::string> created_bhmapsubdirs;
 
@@ -29,7 +29,7 @@ private:
     int update_hashtree_entry(hasher::B2H &parentdirhash, const bool oldbhmap_exists, const hasher::B2H oldfilehash, const hasher::B2H newfilehash, const std::string &bhmapfile, const std::string &relpath);
 
 public:
-    hashmap_builder(const statedirctx &ctx);
+    hashmap_builder(const statedir_context &ctx);
     int generate_hashmap_forfile(hasher::B2H &parentdirhash, const std::string &filepath);
     int remove_hashmapfile(hasher::B2H &parentdirhash, const std::string &filepath);
 };

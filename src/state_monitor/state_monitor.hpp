@@ -61,7 +61,7 @@ private:
     void remove_newfileentry(std::string_view filepath);
 
 public:
-    statedirctx ctx;
+    statedir_context ctx;
     void create_checkpoint();
     void oncreate(const int fd);
     void onopen(const int inodefd, const int flags);

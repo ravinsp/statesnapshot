@@ -7,29 +7,26 @@ namespace statefs
 
 std::string statehistdir;
 
-statedirctx init(const std::string &statehistdir_root)
+statedir_context init(const std::string &statehist_dir_root)
 {
     // Initialize 0 state (current state) directory and return the directory context for it.
-    statehistdir = statehistdir_root;
+    statehistdir = realpath(statehist_dir_root.c_str(), NULL);
     return get_statedir_context(0, true);
-}
+} // namespace statefs
 
 std::string get_statedir_root(const int16_t checkpointid)
 {
-    std::string rootdir = realpath(statehistdir.c_str(), NULL);
-    rootdir = rootdir + "/" + std::to_string(checkpointid);
-    return rootdir;
+    return statehistdir + "/" + std::to_string(checkpointid);
 }
 
-statedirctx get_statedir_context(const int16_t checkpointid, const bool createdirs)
+statedir_context get_statedir_context(const int16_t checkpointid, const bool createdirs)
 {
-    statedirctx ctx;
+    statedir_context ctx;
     ctx.rootdir = get_statedir_root(checkpointid);
     ctx.datadir = ctx.rootdir + DATA_DIR;
     ctx.blockhashmapdir = ctx.rootdir + BHMAP_DIR;
     ctx.hashtreedir = ctx.rootdir + HTREE_DIR;
-    ctx.changesetdir = ctx.rootdir + DELTA_DIR;
-    ctx.fusemountdir = ctx.rootdir + FUSE_DIR;
+    ctx.deltadir = ctx.rootdir + DELTA_DIR;
 
     if (createdirs)
     {
@@ -39,10 +36,8 @@ statedirctx get_statedir_context(const int16_t checkpointid, const bool createdi
             boost::filesystem::create_directories(ctx.blockhashmapdir);
         if (!boost::filesystem::exists(ctx.hashtreedir))
             boost::filesystem::create_directories(ctx.hashtreedir);
-        if (!boost::filesystem::exists(ctx.changesetdir))
-            boost::filesystem::create_directories(ctx.changesetdir);
-        if (!boost::filesystem::exists(ctx.fusemountdir))
-            boost::filesystem::create_directories(ctx.fusemountdir);
+        if (!boost::filesystem::exists(ctx.deltadir))
+            boost::filesystem::create_directories(ctx.deltadir);
     }
 
     return ctx;

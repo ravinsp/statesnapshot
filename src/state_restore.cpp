@@ -17,7 +17,7 @@ namespace statefs
 // Look at new files added and delete them if still exist.
 void state_restore::delete_newfiles()
 {
-    std::string indexfile(ctx.changesetdir);
+    std::string indexfile(ctx.deltadir);
     indexfile.append(IDX_NEWFILES);
 
     std::ifstream infile(indexfile);
@@ -37,7 +37,7 @@ int state_restore::restore_touchedfiles()
 {
     std::unordered_set<std::string> processed;
 
-    std::string indexfile(ctx.changesetdir);
+    std::string indexfile(ctx.deltadir);
     indexfile.append(IDX_TOUCHEDFILES);
 
     std::ifstream infile(indexfile);
@@ -62,9 +62,10 @@ int state_restore::restore_touchedfiles()
     return 0;
 }
 
+// Read the delta block index.
 int state_restore::read_blockindex(std::vector<char> &buffer, std::string_view file)
 {
-    std::string bindexfile(ctx.changesetdir);
+    std::string bindexfile(ctx.deltadir);
     bindexfile.append(file).append(BLOCKINDEX_EXT);
     std::ifstream infile(bindexfile, std::ios::binary | std::ios::ate);
     std::streamsize idxsize = infile.tellg();
@@ -80,6 +81,7 @@ int state_restore::read_blockindex(std::vector<char> &buffer, std::string_view f
     return 0;
 }
 
+// Restore blocks mentioned in the delta block index.
 int state_restore::restore_blocks(std::string_view file, const std::vector<char> &bindex)
 {
     int bcachefd = 0, orifilefd = 0;
@@ -91,7 +93,7 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
 
     // Open block cache file.
     {
-        std::string bcachefile(ctx.changesetdir);
+        std::string bcachefile(ctx.deltadir);
         bcachefile.append(file).append(BLOCKCACHE_EXT);
         bcachefd = open(bcachefile.c_str(), O_RDONLY);
         if (bcachefd <= 0)
@@ -151,13 +153,14 @@ int state_restore::restore_blocks(std::string_view file, const std::vector<char>
     return 0;
 }
 
+// This is called after a rollback so the all checkpoint dirs shift by 1.
 void state_restore::rewind_checkpoints()
 {
-    // Assuming we have restored the current state with current changeset,
-    // we need to shift each history changeset by 1 place.
+    // Assuming we have restored the current state with current delta,
+    // we need to shift each history delta by 1 place.
 
-    // Delete the state 0 (current) changeset.
-    boost::filesystem::remove_all(ctx.changesetdir);
+    // Delete the state 0 (current) delta.
+    boost::filesystem::remove_all(ctx.deltadir);
 
     int16_t oldest_chkpnt = (MAX_CHECKPOINTS + 1) * -1; // +1 because we maintain one extra checkpoint in case of rollbacks.
     for (int16_t chkpnt = -1; chkpnt >= oldest_chkpnt; chkpnt--)
@@ -168,9 +171,9 @@ void state_restore::rewind_checkpoints()
         {
             if (chkpnt == -1)
             {
-                // Shift -1 state changeset dir to 0-state and delete -1 dir.
+                // Shift -1 state delta dir to 0-state and delete -1 dir.
                 std::string delta_1 = dir + DELTA_DIR;
-                boost::filesystem::rename(delta_1, ctx.changesetdir);
+                boost::filesystem::rename(delta_1, ctx.deltadir);
                 boost::filesystem::remove_all(dir);
             }
             else
@@ -182,6 +185,7 @@ void state_restore::rewind_checkpoints()
     }
 }
 
+// Rolls back current state to previous state.
 int state_restore::rollback()
 {
     ctx = get_statedir_context();

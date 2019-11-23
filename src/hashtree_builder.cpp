@@ -10,7 +10,7 @@
 namespace statefs
 {
 
-hashtree_builder::hashtree_builder(const statedirctx &ctx) : ctx(ctx), hmapbuilder(ctx)
+hashtree_builder::hashtree_builder(const statedir_context &ctx) : ctx(ctx), hmapbuilder(ctx)
 {
 }
 
@@ -208,7 +208,7 @@ int hashtree_builder::process_file(hasher::B2H &parentdirhash, const std::string
 
 void hashtree_builder::populate_hintpaths(const char *const idxfile)
 {
-    std::ifstream infile(std::string(ctx.changesetdir).append(idxfile));
+    std::ifstream infile(std::string(ctx.deltadir).append(idxfile));
     if (!infile.fail())
     {
         for (std::string relpath; std::getline(infile, relpath);)
@@ -278,7 +278,7 @@ int main(int argc, char *argv[])
         }
         else
         {
-            statefs::statedirctx ctx = statefs::init(argv[1]);
+            statefs::statedir_context ctx = statefs::init(argv[1]);
             statefs::hashtree_builder builder(ctx);
             if (builder.generate() == -1)
                 std::cerr << "Generation failed\n";
@@ -295,13 +295,13 @@ int main(int argc, char *argv[])
     }
     else if (argc == 3 && std::string(argv[1]) == "restore")
     {
-        statefs::init(argv[2]);
+        statefs::statedir_context dirctx = statefs::init(argv[2]);
         statefs::state_restore staterestore;
         if (staterestore.rollback() == -1)
             std::cerr << "Rollback failed.\n";
 
         // Print root hash.
-        int fd = open(std::string(statefs::statehistdir).append("/0/htree/dir.hash").c_str(), O_RDONLY);
+        int fd = open(std::string(dirctx.hashtreedir).append("/dir.hash").c_str(), O_RDONLY);
         hasher::B2H hash;
         int res = read(fd, &hash, 32);
         std::cout << "State hash: " << std::hex << hash << "\n";

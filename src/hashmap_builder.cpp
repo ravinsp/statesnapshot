@@ -12,7 +12,7 @@
 namespace statefs
 {
 
-hashmap_builder::hashmap_builder(const statedirctx &ctx) : ctx(ctx)
+hashmap_builder::hashmap_builder(const statedir_context &ctx) : ctx(ctx)
 {
 }
 
@@ -20,7 +20,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
 {
     // We attempt to avoid a full rebuild of the block hash map file when possible.
     // For this optimisation, both the block hash map (.bhmap) file and the
-    // changeset block index (.bindex) file must exist.
+    // delta block index (.bindex) file must exist.
 
     // If the block index exists, we generate/update the hashmap file with the aid of that.
     // Block index file contains the updated blockids. If not, we simply rehash all the blocks.
@@ -47,7 +47,7 @@ int hashmap_builder::generate_hashmap_forfile(hasher::B2H &parentdirhash, const 
     if (!bhmapdata.empty())
         memcpy(&oldfilehash, bhmapdata.data(), hasher::HASH_SIZE);
 
-    // Attempt to read the changeset block index file.
+    // Attempt to read the delta block index file.
     std::map<uint32_t, hasher::B2H> bindex;
     if (get_blockindex(bindex, blockcount, relpath) == -1)
         return -1;
@@ -108,8 +108,8 @@ int hashmap_builder::read_blockhashmap(std::vector<char> &bhmapdata, std::string
 int hashmap_builder::get_blockindex(std::map<uint32_t, hasher::B2H> &idxmap, uint32_t &blockcount, const std::string &filerelpath)
 {
     std::string bindexfile;
-    bindexfile.reserve(ctx.changesetdir.length() + filerelpath.length() + BLOCKINDEX_EXT_LEN);
-    bindexfile.append(ctx.changesetdir).append(filerelpath).append(BLOCKINDEX_EXT);
+    bindexfile.reserve(ctx.deltadir.length() + filerelpath.length() + BLOCKINDEX_EXT_LEN);
+    bindexfile.append(ctx.deltadir).append(filerelpath).append(BLOCKINDEX_EXT);
 
     if (boost::filesystem::exists(bindexfile))
     {
@@ -154,8 +154,8 @@ int hashmap_builder::update_hashes(
     hasher::B2H *hashes, const off_t hashes_size, const std::string &relpath, const int orifd,
     const uint32_t blockcount, const std::map<uint32_t, hasher::B2H> &bindex, const std::vector<char> &bhmapdata)
 {
-    // If both existing changeset block index and block hash map is available, we can just overlay the
-    // changed block hashes (mentioned in the changeset block index) on top of the old block hashes.
+    // If both existing delta block index and block hash map is available, we can just overlay the
+    // changed block hashes (mentioned in the delta block index) on top of the old block hashes.
     if (!bhmapdata.empty() && !bindex.empty())
     {
         // Load old hashes.

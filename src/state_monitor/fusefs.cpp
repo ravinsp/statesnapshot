@@ -1251,12 +1251,17 @@ void maximize_fd_limit()
         warn("WARNING: setrlimit() failed with");
 }
 
-int start(const char *arg0, const char *statehistdir)
+int start(const char *arg0, const char *statehistdir, const char *fusemntdir)
 {
+    // We need an fd for every entry in our the filesystem that the
+    // kernel knows about. This is way more than most processes need,
+    // so try to get rid of any resource softlimit.
+    maximize_fd_limit();
+
     // We consider this as the first run of the history dir is empty.
     const bool firstrun = boost::filesystem::is_empty(statehistdir);
 
-    statefs::statedirctx dirctx = statefs::init(statehistdir);
+    statefs::statedir_context dirctx = statefs::init(statehistdir);
     fs.source = dirctx.datadir;
     statemonitor.ctx = dirctx;
 
@@ -1306,7 +1311,7 @@ int start(const char *arg0, const char *statehistdir)
     struct fuse_loop_config loop_config;
     loop_config.clone_fd = 0;
     loop_config.max_idle_threads = 10;
-    if (fuse_session_mount(se, dirctx.fusemountdir.c_str()) != 0)
+    if (fuse_session_mount(se, fusemntdir) != 0)
         goto err_out3;
 
     ret = fuse_session_loop_mt(se, &loop_config);
@@ -1327,16 +1332,11 @@ err_out1:
 
 int main(int argc, char *argv[])
 {
-    if (argc != 2)
+    if (argc != 3)
     {
         std::cerr << "Incorrect arguments.\n";
         exit(1);
     }
 
-    // We need an fd for every dentry in our the filesystem that the
-    // kernel knows about. This is way more than most processes need,
-    // so try to get rid of any resource softlimit.
-    fusefs::maximize_fd_limit();
-
-    fusefs::start(argv[0], argv[1]);
+    fusefs::start(argv[0], argv[1], argv[2]);
 }
